@@ -1,0 +1,4 @@
+{
+  "python.defaultInterpreterPath": "/home/khanh/project/LLM-RAGs-Agent/LLMs-RAG-Agent/.venv/bin/python",
+  "python.terminal.activateEnvironment": true
+}

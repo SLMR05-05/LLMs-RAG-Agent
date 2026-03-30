@@ -1,0 +1,39 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T5]{fontenc}
+\usepackage[vietnamese]{babel}
+\usepackage{geometry}
+\usepackage{hyperref}
+\geometry{margin=2.5cm}
+
+\title{SmartDoc AI - Intelligent Document Q\&A System}
+\author{LLMs-RAG-Agent Team}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Gioi thieu}
+SmartDoc AI la he thong hoi dap tai lieu su dung RAG voi mo hinh ngon ngu chay local.
+
+\section{Kien truc he thong}
+He thong gom cac thanh phan chinh:
+\begin{itemize}
+	\item Streamlit frontend
+	\item LangChain pipeline
+	\item FAISS vector store
+	\item Ollama LLM (qwen2.5:7b)
+\end{itemize}
+
+\section{Cong nghe su dung}
+\begin{itemize}
+	\item Python, Streamlit, LangChain
+	\item sentence-transformers (multilingual MPNet)
+	\item FAISS cho similarity search
+\end{itemize}
+
+\section{Ket luan}
+Project ho tro upload PDF va dat cau hoi tren noi dung tai lieu theo huong local-first.
+
+\end{document}
