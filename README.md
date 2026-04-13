@@ -2,6 +2,8 @@
 
 SmartDoc AI la ung dung RAG (Retrieval-Augmented Generation) cho phep:
 - Upload file PDF
+- Upload anh hoac ZIP anh de chuyen van ban tu hinh anh sang .txt voi EasyOCR
+- Hoi AI ve noi dung trong hinh anh duoc trich xuat
 - Tao embeddings local bang Ollama (`nomic-embed-text`)
 - Luu tru va truy xuat bang FAISS
 - Tra loi cau hoi bang LLM local qua Ollama (mac dinh: qwen2.5:7b)
@@ -42,7 +44,7 @@ pip install -r requirement_simplified.txt
 
 ```bash
 ollama pull nomic-embed-text
-ollama pull qwen2.5:7b
+ollama pull qwen2.5:1.5b
 ```
 
 ## Chay ung dung
