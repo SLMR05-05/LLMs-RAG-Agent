@@ -1,9 +1,16 @@
+import hashlib
 import os
 import tempfile
+import zipfile
+from io import BytesIO
+from pathlib import Path
 from typing import Dict, List, Tuple
 
+import easyocr
+import numpy as np
 import ollama
 import streamlit as st
+from PIL import Image
 from langchain_core.embeddings import Embeddings
 from langchain_core.prompts import PromptTemplate
 from langchain_community.document_loaders import PDFPlumberLoader
@@ -20,6 +27,8 @@ def init_state() -> None:
 		"vector_store": None,
 		"chat_history": [],
 		"active_file": None,
+		"image_context": None,
+		"image_file_key": None,
 	}
 	for key, value in defaults.items():
 		if key not in st.session_state:
@@ -127,6 +136,53 @@ def build_retriever(pdf_path: str, chunk_size: int, chunk_overlap: int, top_k: i
 	)
 	return retriever, vector_store, len(docs), len(chunks)
 
+SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif"}
+
+
+def is_supported_image(filename: str) -> bool:
+	return Path(filename).suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
+
+
+@st.cache_resource(show_spinner=False)
+def get_easyocr_reader() -> easyocr.Reader:
+	return easyocr.Reader(["en", "vi"], gpu=False)
+
+
+def load_image_bytes(image_bytes: bytes) -> np.ndarray:
+	image = Image.open(BytesIO(image_bytes)).convert("RGB")
+	return np.array(image)
+
+
+def extract_text_from_image_bytes(image_bytes: bytes) -> str:
+	image_array = load_image_bytes(image_bytes)
+	results = get_easyocr_reader().readtext(image_array, detail=0)
+	return "\n".join(results).strip()
+
+
+def compute_image_upload_key(files) -> str:
+	hash_obj = hashlib.md5()
+	for uploaded_file in sorted(files, key=lambda f: f.name):
+		content = uploaded_file.getvalue()
+		hash_obj.update(uploaded_file.name.encode("utf-8"))
+		hash_obj.update(str(uploaded_file.size).encode("utf-8"))
+		# include a small sample of bytes so identical names/sizes with different content are handled
+		hash_obj.update(content[:1024])
+	return hash_obj.hexdigest()
+
+
+def gather_images_from_uploaded_files(files):
+	images = []
+	for uploaded_file in files:
+		content = uploaded_file.getvalue()
+		if uploaded_file.name.lower().endswith(".zip") or zipfile.is_zipfile(BytesIO(content)):
+			with zipfile.ZipFile(BytesIO(content)) as archive:
+				for info in archive.infolist():
+					if not info.is_dir() and is_supported_image(info.filename):
+						images.append((Path(info.filename).name, archive.read(info)))
+		elif is_supported_image(uploaded_file.name):
+			images.append((uploaded_file.name, content))
+	return images
+
 
 def ask_rag(question: str, retriever, model_name: str) -> Tuple[str, List[Dict[str, str]]]:
 	prompt = build_prompt(is_vietnamese(question))
@@ -142,6 +198,12 @@ def ask_rag(question: str, retriever, model_name: str) -> Tuple[str, List[Dict[s
 		sources.append({"page": str(page), "snippet": snippet})
 
 	return answer, sources
+
+
+def ask_image_question(question: str, image_context: str, model_name: str) -> str:
+	prompt = build_prompt(is_vietnamese(question))
+	formatted_prompt = prompt.format(context=image_context, question=question)
+	return generate_with_ollama(model_name, formatted_prompt)
 
 
 def render_sidebar() -> Tuple[int, int, int, str]:
@@ -174,6 +236,11 @@ def render_sidebar() -> Tuple[int, int, int, str]:
 			st.session_state.vector_store = None
 			st.session_state.active_file = None
 			st.success("Vector store cleared.")
+
+		if st.button("Clear Image OCR Context", type="secondary"):
+			st.session_state.image_context = None
+			st.session_state.image_file_key = None
+			st.success("Image OCR context cleared.")
 
 	return chunk_size, chunk_overlap, top_k, model_name
 
@@ -222,7 +289,84 @@ def main() -> None:
 				if os.path.exists(temp_pdf_path):
 					os.remove(temp_pdf_path)
 
+	st.divider()
+	st.subheader("Image OCR")
+	st.write("Upload multiple images or a ZIP archive containing image files.")
+	uploaded_images = st.file_uploader(
+		"Upload image files or ZIP archive",
+		type=["png", "jpg", "jpeg", "bmp", "gif", "tiff", "tif", "zip"],
+		accept_multiple_files=True,
+	)
+
+	image_file_key = None
+	if uploaded_images:
+		image_file_key = compute_image_upload_key(uploaded_images)
+		image_files = gather_images_from_uploaded_files(uploaded_images)
+		if image_files and st.session_state.image_file_key != image_file_key:
+			with st.spinner("Extracting text from images..."):
+				extracted_texts = []
+				for name, content in image_files:
+					try:
+						text = extract_text_from_image_bytes(content)
+					except Exception as exc:
+						text = f"[Lỗi khi đọc ảnh: {exc}]"
+					extracted_texts.append((name, text))
+
+				if extracted_texts:
+					combined_text = "\n\n".join(
+						f"--- {name} ---\n{text or '[Không tìm thấy văn bản]'}"
+						for name, text in extracted_texts
+					)
+					st.session_state.image_context = combined_text
+					st.session_state.image_file_key = image_file_key
+					with st.expander("Preview OCR text"):
+						st.text_area("Extracted text", value=combined_text, height=300)
+
+					zip_buffer = BytesIO()
+					with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+						for name, text in extracted_texts:
+							zipf.writestr(f"{Path(name).stem}.txt", text or "")
+					zip_data = zip_buffer.getvalue()
+
+					st.download_button(
+						"Download all extracted text as ZIP",
+						data=zip_data,
+						file_name="ocr_texts.zip",
+						mime="application/zip",
+					)
+
+					for name, text in extracted_texts:
+						st.download_button(
+							f"Download {Path(name).stem}.txt",
+							data=text.encode("utf-8"),
+							file_name=f"{Path(name).stem}.txt",
+							mime="text/plain",
+						)
+		elif uploaded_images and not image_files:
+			st.warning("No supported image files were found in the uploaded input.")
+	elif st.session_state.image_context:
+		st.info("Image content already loaded. Ask a question about uploaded images below.")
+
 	question = st.text_input("Ask a question")
+	question_about_image = st.text_input("Ask a question about uploaded images")
+
+	if question_about_image:
+		if not st.session_state.image_context:
+			st.warning("Please upload and process image files first.")
+		else:
+			try:
+				with st.spinner("Generating answer for image content..."):
+					image_answer = ask_image_question(
+						question_about_image,
+						st.session_state.image_context,
+						model_name,
+					)
+
+				st.subheader("Answer about image content")
+				st.write(image_answer)
+			except Exception as exc:
+				st.error("Could not generate answer from image content. Please ensure Ollama is running and the model is available.")
+				st.exception(exc)
 
 	if question:
 		if st.session_state.retriever is None:
