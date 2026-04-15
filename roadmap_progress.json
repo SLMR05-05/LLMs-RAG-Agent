@@ -1,0 +1,250 @@
+{
+    "meta": {
+        "project": "LLMs-RAG-Agent",
+        "source_roadmap": "roadmap.txt",
+        "last_updated": "2026-04-15",
+        "owner_note": "Progress snapshot generated from current backend code. Manual checks passed: success, failure, concurrency, restart persistence for jobs."
+    },
+    "overall": {
+        "completed_ratio_estimate": 0.6,
+        "current_focus": "Persistent SQLite jobs completed; starting GraphRAG phase 3.1",
+        "next_milestone": "Implement GraphRAG phase 3.1 (entity extraction + graph persistence)"
+    },
+    "implemented": {
+        "fastapi_3_layer_architecture": {
+            "status": "done",
+            "evidence": [
+                "backend/api/main.py",
+                "backend/services/rag_service.py",
+                "backend/services/notebook_storage.py"
+            ],
+            "notes": "API layer, service layer, and storage layer are separated."
+        },
+        "required_api_endpoints": {
+            "status": "done",
+            "items": [
+                "POST /notebooks",
+                "GET /notebooks",
+                "POST /notebooks/{notebook_id}/sources/upload",
+                "POST /notebooks/{notebook_id}/index",
+                "POST /notebooks/{notebook_id}/chat",
+                "GET /notebooks/{notebook_id}/sources",
+                "GET /jobs/{job_id}",
+                "GET /healthz"
+            ],
+            "evidence": [
+                "backend/api/main.py"
+            ]
+        },
+        "multi_document_upload": {
+            "status": "done",
+            "evidence": [
+                "backend/api/main.py",
+                "backend/services/rag_service.py"
+            ],
+            "notes": "Upload supports multiple files in one request."
+        },
+        "multi_format_parsing": {
+            "status": "done",
+            "formats": [
+                "pdf",
+                "docx",
+                "txt",
+                "image_ocr(png,jpg,jpeg,bmp,gif,tiff,tif)"
+            ],
+            "evidence": [
+                "backend/services/rag_service.py"
+            ]
+        },
+        "chunking_and_metadata": {
+            "status": "done",
+            "chunking": "RecursiveCharacterTextSplitter with chunk_size/chunk_overlap",
+            "metadata": [
+                "notebook_id",
+                "document_id",
+                "chunk_index",
+                "source_name",
+                "page_number",
+                "file_hash"
+            ],
+            "evidence": [
+                "backend/services/rag_service.py",
+                "backend/storage/schema.sql"
+            ]
+        },
+        "embedding_and_faiss_persistence": {
+            "status": "done",
+            "evidence": [
+                "backend/services/rag_service.py",
+                "backend/services/notebook_storage.py"
+            ],
+            "notes": "Embedding via Ollama (nomic-embed-text), FAISS save/load per notebook folder."
+        },
+        "sqlite_metadata_and_chat_memory": {
+            "status": "done",
+            "tables": [
+                "notebooks",
+                "source_documents",
+                "chunks",
+                "vector_entries",
+                "chat_sessions",
+                "chat_messages",
+                "graph_snapshots"
+            ],
+            "constraints": [
+                "ON DELETE CASCADE",
+                "indexes for notebook_id/document_id",
+                "UNIQUE(notebook_id, file_hash)"
+            ],
+            "evidence": [
+                "backend/storage/schema.sql"
+            ]
+        },
+        "query_rewrite_and_context_window": {
+            "status": "done",
+            "window": "last 5 messages",
+            "evidence": [
+                "backend/services/rag_service.py",
+                "backend/services/notebook_storage.py"
+            ]
+        },
+        "retrieval_with_filters": {
+            "status": "done",
+            "filters": [
+                "notebook_id",
+                "source_name"
+            ],
+            "evidence": [
+                "backend/services/rag_service.py"
+            ]
+        },
+        "grounded_generation_and_citations": {
+            "status": "done",
+            "output": [
+                "answer",
+                "citations(source_name,page,snippet)"
+            ],
+            "evidence": [
+                "backend/services/rag_service.py",
+                "backend/api/schemas.py"
+            ]
+        },
+        "background_index_jobs": {
+            "status": "done",
+            "notes": "FastAPI BackgroundTasks + SQLite-backed JobStore",
+            "evidence": [
+                "backend/api/main.py",
+                "backend/services/job_service.py",
+                "backend/services/notebook_storage.py",
+                "backend/storage/schema.sql"
+            ]
+        },
+        "durable_job_persistence": {
+            "status": "done",
+            "notes": "Jobs now persist in SQLite with lifecycle fields, indexes, and updated_at trigger; GET /jobs contract preserved.",
+            "evidence": [
+                "backend/storage/schema.sql",
+                "backend/services/notebook_storage.py",
+                "backend/services/job_service.py",
+                "backend/api/main.py"
+            ]
+        },
+        "api_upload_hardening": {
+            "status": "done",
+            "notes": "Added max file count, max size limit, extension + MIME validation, and structured rejection responses.",
+            "evidence": [
+                "backend/api/main.py",
+                "backend/api/schemas.py",
+                "backend/core/config.py"
+            ]
+        },
+        "cors_and_env_settings": {
+            "status": "done",
+            "notes": "Added environment-driven settings and CORS middleware for split frontend/backend deployment.",
+            "evidence": [
+                "backend/core/config.py",
+                "backend/api/main.py"
+            ]
+        }
+    },
+    "roadmap_status": {
+        "phase_1_knowledge_management": {
+            "status": "mostly_done",
+            "done": [
+                "multi-source upload",
+                "multi-format parsing",
+                "persistent FAISS per notebook",
+                "metadata schema",
+                "file hash dedup in DB",
+                "background indexing"
+            ],
+            "pending": [
+                "advanced FAISS compression/index strategy for very large data"
+            ]
+        },
+        "phase_2_conversational_ai": {
+            "status": "partially_done",
+            "done": [
+                "chat memory in SQLite",
+                "sliding window context",
+                "query rewrite",
+                "citations in API response",
+                "durable index jobs in SQLite"
+            ],
+            "pending": [
+                "interactive clickable citation UI"
+            ]
+        },
+        "phase_3_graphrag": {
+            "status": "not_started",
+            "pending": [
+                "entity extraction pipeline",
+                "graph storage usage",
+                "hybrid retriever (vector + graph)",
+                "community summary"
+            ]
+        },
+        "phase_4_ui_ux": {
+            "status": "not_started",
+            "pending": [
+                "3-column UI",
+                "studio panel one-click actions",
+                "responsive UX improvements"
+            ]
+        },
+        "phase_5_local_optimization": {
+            "status": "partially_done",
+            "done": [
+                "model_name selectable from chat request"
+            ],
+            "pending": [
+                "GPU/faiss-gpu path",
+                "quantization guidance flow",
+                "dockerization",
+                "telemetry for unanswered questions"
+            ]
+        }
+    },
+    "risks_and_gaps": [
+        "No explicit timeout/retry strategy around Ollama calls.",
+        "Upload endpoint validates by extension and MIME but does not yet scan file content signatures (magic bytes)."
+    ],
+    "next_actions_prioritized": [
+        {
+            "priority": 1,
+            "task": "Implement GraphRAG phase 3.1 (entity extraction + graph persistence)"
+        },
+        {
+            "priority": 2,
+            "task": "Add timeout/retry strategy and failure taxonomy for Ollama calls"
+        },
+        {
+            "priority": 3,
+            "task": "Add magic-byte file signature checks for uploads"
+        },
+        {
+            "priority": 4,
+            "task": "Start UI phase 4: 3-column layout with interactive citation badges"
+        }
+    ]
+}

@@ -1,0 +1,202 @@
+Giai đoạn 1: Hoàn thiện tính năng Quản lý tri thức (Knowledge Management)
+NotebookLM không chỉ là công cụ hỏi đáp từng file đơn lẻ mà là một "Sổ ghi chú" chứa nhiều nguồn dữ 
+liệu.
+
+Hỗ trợ đa định dạng tài liệu: Ngoài PDF, cần tích hợp python-docx để đọc file Word và xử lý file .txt.
+
+Multi-document RAG: Nâng cấp code để hệ thống có thể truy xuất thông tin từ nhiều tài liệu cùng lúc 
+trong một "Notebook" thay vì chỉ file đang active.
+
+Metadata Filtering: Lưu trữ tên file và trang vào metadata của FAISS để khi trả lời, AI có thể chỉ 
+rõ thông tin nằm ở tài liệu nào.
+
+
+
+
+Giai đoạn 2: Nâng cấp trải nghiệm hội thoại (Conversational AI)
+Lưu trữ lịch sử hội thoại (Chat Memory): Sử dụng st.session_state hoặc cơ sở dữ liệu nhỏ (như SQLite)
+để lưu lại các câu hỏi trước đó. Điều này cho phép người dùng đặt các câu hỏi tiếp nối (follow-up
+questions).
+
+Citation & Source Tracking: Hiện tại bạn đã có snippet nguồn trong mã nguồn, nhưng cần hiển thị chúng 
+trực quan trên UI dưới dạng các "badge" có thể click vào để xem đoạn văn bản gốc trong tài liệu.
+
+
+
+
+Giai đoạn 3: 
+Bước 3.1: Xây dựng Knowledge Graph (Indexing Phase)
+Trích xuất thực thể: Sau bước RecursiveCharacterTextSplitter, thay vì chỉ đẩy vào FAISS, bạn dùng LLM 
+(Qwen2.5) để quét qua các chunk và trích xuất: "Ai làm gì?", "Khái niệm A có quan hệ thế nào với B?".
+
+Lưu trữ: Bạn cần thêm một cơ sở dữ liệu đồ thị nhẹ chạy được local như NetworkX (cho Python) hoặc
+ Neo4j (nếu máy mạnh).
+
+Bước 3.2: Truy vấn kết hợp (Query Phase)
+Global Search: Khi người dùng hỏi những câu mang tính tổng quát như "Tóm tắt các điểm chính của toàn 
+bộ tài liệu này?", Vector Search truyền thống thường trả về kết quả kém. GraphRAG sẽ quét qua các 
+cộng đồng thực thể (Community Detection) để trả lời.
+
+Local Search: Với các câu hỏi cụ thể, hệ thống sẽ tìm kiếm thực thể liên quan trong Graph, sau đó mở 
+rộng sang các thực thể lân cận để lấy thêm ngữ cảnh mà Vector Search có thể bỏ lỡ.
+
+
+
+Giai đoạn 4: Phát triển giao diện (UI/UX) chuyên nghiệp
+Nhóm bạn đã có bản phân tích giao diện NotebookLM rất chi tiết. Hãy áp dụng nó vào code:
+
+Bố cục 3 cột (3-Column Layout):
+
+Cột trái: Danh sách các nguồn tài liệu (Sources).
+
+Cột giữa: Cửa sổ chat chính.
+
+Cột phải (Studio): Các tính năng tự động như "Tóm tắt tài liệu", "Tạo bài kiểm tra", "Gợi ý ý tưởng" 
+dựa trên toàn bộ Notebook.
+
+Tính năng bổ sung: Thêm nút "Clear History" và "Clear Vector Store" để quản lý tài nguyên máy tính 
+hiệu quả.
+
+
+
+
+Giai đoạn 5: Tối ưu hóa chạy Local
+Hỗ trợ GPU: Cấu hình để hệ thống tự động nhận diện và sử dụng GPU (nếu có) thông qua thư viện torch 
+và faiss-gpu để tăng tốc độ tạo embedding và trả lời.
+
+Lựa chọn mô hình linh hoạt: Cho phép người dùng chọn giữa các mô hình nhẹ như qwen2.5:1.5b (cho máy 
+yếu) hoặc qwen2.5:7b (cho máy mạnh) ngay trên giao diện.
+
+
+Giai đoạn 1: Quản lý tri thức (Multi-Source Management)
+Giai đoạn này tập trung vào việc chuyển từ tư duy "hỏi-đáp một file" sang "hỏi-đáp một không gian tri 
+thức".
+
+Cần phát triển:
+
+Persistent Vector Database: Thay vì khởi tạo FAISS trong RAM mỗi khi chạy app.py, hãy lưu Index xuống 
+ổ đĩa (vector_store.save_local("index_name")) để người dùng không phải re-index lại tài liệu cũ mỗi 
+lần mở app.
+
+
+Metadata Schema: Bổ sung trường source_name, page_number, và file_hash vào từng chunk. Điều này giúp 
+tránh việc index trùng lặp khi người dùng upload cùng một file nhiều lần.
+
+Background Processing: Sử dụng luồng phụ (Threading) để xử lý PDF/OCR nhằm tránh làm treo giao diện 
+Streamlit khi xử lý file lớn.
+
+Lỗi cần tránh:
+
+Quá tải RAM: Lưu trữ quá nhiều vector của nhiều tài liệu trong RAM mà không tối ưu (nên sử dụng 
+FAISS với chỉ mục nén như IVFPQ nếu số lượng tài liệu lớn).
+
+Lỗi mã hóa (Encoding): Khi đọc file .txt hoặc .docx, nếu không xử lý UTF-8 cẩn thận sẽ dẫn đến lỗi 
+hiển thị tiếng Việt.
+
+Giai đoạn 2: Trải nghiệm hội thoại & Context Management
+Mục tiêu là làm cho AI "nhớ" được những gì đã nói và "trích dẫn" chính xác nguồn tin.
+
+Cần phát triển:
+
+
+Sliding Window Context: Khi lưu chat_history, không nên đưa toàn bộ lịch sử vào Prompt vì sẽ làm đầy 
+Token. Chỉ nên lấy 3-5 câu hội thoại gần nhất.
+
+
+Interactive Citations: Phát triển logic để khi người dùng click vào "badge" nguồn, giao diện sẽ hiển 
+thị đúng đoạn văn bản đó (hoặc mở PDF đúng trang đó).
+
+Query Rewriting: Sử dụng LLM để viết lại câu hỏi của người dùng dựa trên ngữ cảnh cũ trước khi đưa 
+vào RAG (ví dụ: "Nó hoạt động thế nào?" -> "Dự án BusTrack hoạt động thế nào?").
+
+Lỗi cần tránh:
+
+Hallucination (Ảo giác): AI trả lời dựa trên kiến thức có sẵn thay vì tài liệu. Cần siết chặt Prompt 
+yêu cầu: "Chỉ trả lời dựa trên Context, nếu không có hãy nói không biết".
+
+
+Mất lịch sử khi Refresh: Streamlit sẽ reset state khi F5, cần tích hợp lưu lịch sử vào file JSON hoặc 
+SQLite cục bộ.
+
+Giai đoạn 3: GraphRAG & Advanced Retrieval
+Đây là "trái tim" của hệ thống để cạnh tranh với NotebookLM thật.
+
+Cần phát triển:
+
+
+Entity Extraction Pipeline: Xây dựng quy trình dùng LLM trích xuất thực thể (người, địa điểm, dự án) 
+và quan hệ từ các chunk.
+
+Hybrid Retriever: Viết lại hàm ask_rag để kết hợp điểm số từ FAISS (Vector) và độ liên quan trong đồ 
+thị (Graph).
+
+
+Community Summary: Định kỳ chạy thuật toán phát hiện cộng đồng trong đồ thị để tạo ra các bản tóm tắt 
+cấp cao cho toàn bộ Notebook.
+
+Lỗi cần tránh:
+
+Bùng nổ chi phí tính năng: Trích xuất Graph bằng LLM rất chậm. Nếu không lưu trữ (Cache) kết quả 
+trích xuất, mỗi lần hỏi sẽ mất rất nhiều thời gian.
+
+Đồ thị quá rác: LLM trích xuất quá nhiều thực thể không quan trọng làm loãng đồ thị. Cần một danh 
+sách "Entity Types" cố định trong Prompt.
+
+Giai đoạn 4: Giao diện 3 cột & Frontend Chuyên nghiệp
+Chuyển đổi hoàn toàn giao diện từ Streamlit cơ bản sang Layout 3 cột giống bản phân tích UI của bạn.
+
+Cần phát triển:
+
+
+Sidebar Nguồn (Cột 1): Cho phép chọn/bỏ chọn từng file để giới hạn phạm vi AI trả lời.
+
+
+Chat View (Cột 2): Hỗ trợ render Markdown, bảng biểu và khối code.
+
+
+Studio Panel (Cột 3): Thêm các nút "Một chạm" (One-click) để yêu cầu AI tự tạo mục lục, tóm tắt hoặc 
+tạo câu hỏi ôn tập từ tất cả tài liệu.
+
+Lỗi cần tránh:
+
+Giao diện thiếu phản hồi: Khi AI đang suy nghĩ, cần có hiệu ứng "Typing" hoặc Spinner để người dùng 
+biết app không bị treo.
+
+Bố cục không co giãn: Giao diện 3 cột rất dễ bị lỗi hiển thị trên màn hình nhỏ.
+
+Giai đoạn 5: Tối ưu hóa Local & Deployment
+Cần phát triển:
+
+
+Quantization: Hướng dẫn người dùng sử dụng các bản model GGUF (4-bit, 8-bit) qua Ollama để chạy 
+được trên máy không có GPU mạnh.
+
+Dockerization: Đóng gói toàn bộ Backend (FastAPI), Vector DB và Frontend vào Docker để dễ dàng 
+cài đặt trên các máy khác nhau.
+
+Telemetry (Optional): Ghi lại nhật ký các câu hỏi AI không trả lời được để bạn điều chỉnh lại 
+chunk_size hoặc prompt.
+
+Lỗi cần tránh:
+
+Hard-coded Paths: Tránh viết cứng đường dẫn thư mục. Hãy sử dụng thư viện pathlib để app chạy 
+được trên cả Windows và Linux.
+
+Xung đột thư viện: Cần quản lý chặt chẽ requirements.txt để tránh lỗi phiên bản giữa langchain và 
+pydantic.
+
+
+
+CORS (Cross-Origin Resource Sharing): Khi chạy Frontend (ví dụ: cổng 5500) và Backend (cổng 8000), 
+trình duyệt sẽ chặn yêu cầu. Bạn phải cấu hình CORSMiddleware trong FastAPI để cho phép Frontend 
+truy cập.
+
+Xử lý Bất đồng bộ (Async): Các tác vụ như tạo Embedding hay trích xuất GraphRAG rất tốn thời gian. 
+Đừng để người dùng đợi ở trạng thái "treo" trình duyệt; hãy sử dụng BackgroundTasks trong FastAPI 
+để xử lý ngầm và thông báo qua WebSocket hoặc Long Polling.
+
+Quản lý Session: NotebookLM cho phép làm việc trên nhiều sổ ghi chú. Backend cần quản lý session_id 
+để biết câu hỏi này thuộc về tài liệu nào, tránh việc AI lấy nhầm ngữ cảnh từ notebook khác.
+
+Lỗi tải file lớn: Khi viết API upload, cần giới hạn dung lượng file và kiểm tra định dạng (PDF/Docx) 
+ngay tại lớp API để tránh làm tràn bộ nhớ đệm của server.
