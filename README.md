@@ -1,7 +1,7 @@
 # SmartDoc AI - Intelligent Document Q&A System
 
 SmartDoc AI la ung dung RAG (Retrieval-Augmented Generation) cho phep:
-- Upload file PDF
+- Upload file PDF, DOCX
 - Upload anh hoac ZIP anh de chuyen van ban tu hinh anh sang .txt voi EasyOCR
 - Hoi AI ve noi dung trong hinh anh duoc trich xuat
 - Tao embeddings local bang Ollama (`nomic-embed-text`)
