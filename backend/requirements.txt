@@ -8,3 +8,17 @@ pypdf==5.1.0
 numpy==1.26.4   
 pandas==2.2.3
 ollama>=0.6.0,<1.0.0
+easyocr
+python-docx
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic-settings
+aiofiles
+orjson
+sqlalchemy
+aiosqlite
+alembic
+pytest
+pytest-asyncio
+httpx

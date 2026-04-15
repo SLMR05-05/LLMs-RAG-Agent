@@ -1,0 +1,303 @@
+import type { FC } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import type { ChangeEvent, KeyboardEvent } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { useAppStore } from '../../store/useAppStore';
+import { Send } from 'lucide-react';
+import { apiService } from '../../services/api';
+import CitationBadge from './CitationBadge';
+
+type CitationDetail = {
+    source_name: string;
+    page?: number | null;
+    snippet: string;
+};
+
+type MessageSegment =
+    | { kind: 'text'; content: string }
+    | { kind: 'citation'; number: number };
+
+const markdownComponents: Components = {
+    p: ({ children }) => <p className="mb-3 last:mb-0 leading-7 text-gray-800">{children}</p>,
+    ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5 text-gray-800">{children}</ul>,
+    ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5 text-gray-800">{children}</ol>,
+    li: ({ children }) => <li className="leading-7">{children}</li>,
+    a: ({ children, href }) => (
+        <a href={href} target="_blank" rel="noreferrer" className="text-blue-600 underline underline-offset-2 hover:text-blue-700">
+            {children}
+        </a>
+    ),
+    blockquote: ({ children }) => (
+        <blockquote className="mb-3 border-l-4 border-gray-200 pl-4 italic text-gray-600">
+            {children}
+        </blockquote>
+    ),
+    code: ({ children, className }) => {
+        const isInline = !className;
+        return isInline ? (
+            <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[0.9em] text-gray-800">{children}</code>
+        ) : (
+            <code className={className}>{children}</code>
+        );
+    },
+    pre: ({ children }) => (
+        <pre className="mb-3 overflow-x-auto rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-800">{children}</pre>
+    ),
+    table: ({ children }) => (
+        <div className="mb-3 overflow-x-auto rounded-xl border border-gray-200">
+            <table className="w-full border-collapse text-left text-sm">{children}</table>
+        </div>
+    ),
+    thead: ({ children }) => <thead className="bg-gray-50">{children}</thead>,
+    th: ({ children }) => (
+        <th className="border-b border-gray-200 px-3 py-2 font-semibold text-gray-900">{children}</th>
+    ),
+    td: ({ children }) => (
+        <td className="border-b border-gray-100 px-3 py-2 align-top text-gray-700">{children}</td>
+    ),
+};
+
+function splitContentByCitations(content: string): MessageSegment[] {
+    const citationPattern = /\[(\d+)\]/g;
+    const segments: MessageSegment[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = citationPattern.exec(content)) !== null) {
+        if (match.index > lastIndex) {
+            segments.push({ kind: 'text', content: content.slice(lastIndex, match.index) });
+        }
+
+        segments.push({ kind: 'citation', number: Number(match[1]) });
+        lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < content.length) {
+        segments.push({ kind: 'text', content: content.slice(lastIndex) });
+    }
+
+    return segments.length > 0 ? segments : [{ kind: 'text', content }];
+}
+
+function renderAssistantContent(content: string, citations: CitationDetail[] = []) {
+    return splitContentByCitations(content).map((segment, index) => {
+        if (segment.kind === 'citation') {
+            const citation = citations[segment.number - 1];
+
+            return citation ? (
+                <CitationBadge
+                    key={`citation-${segment.number}-${index}`}
+                    number={segment.number}
+                    sourceName={citation.source_name}
+                    snippet={citation.snippet}
+                    page={citation.page}
+                />
+            ) : (
+                <span
+                    key={`citation-${segment.number}-${index}`}
+                    className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-[10px] font-semibold text-gray-500"
+                >
+                    {segment.number}
+                </span>
+            );
+        }
+
+        return (
+            <ReactMarkdown
+                key={`markdown-${index}`}
+                remarkPlugins={[remarkGfm]}
+                components={markdownComponents}
+            >
+                {segment.content}
+            </ReactMarkdown>
+        );
+    });
+}
+
+export const ChatArea: FC = () => {
+    const {
+        chatMessages,
+        addChatMessage,
+        isTyping,
+        setIsTyping,
+        activeNotebookId,
+        sources,
+        setError,
+    } = useAppStore();
+
+    const [inputValue, setInputValue] = useState('');
+    const [textareaHeight, setTextareaHeight] = useState('44px');
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    // Auto-scroll to bottom on new messages
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [chatMessages, isTyping]);
+
+    // Auto-resize textarea
+    const handleTextareaChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+        setInputValue(e.target.value);
+
+        // Reset height to auto to get actual scrollHeight
+        e.target.style.height = 'auto';
+        const height = Math.min(e.target.scrollHeight, 160);
+        setTextareaHeight(`${height}px`);
+        e.target.style.height = `${height}px`;
+    };
+
+    // Handle sending message
+    const handleSendMessage = async () => {
+        const question = inputValue.trim();
+        if (!question || !activeNotebookId) return;
+
+        // Reset textarea
+        setTextareaHeight('44px');
+
+        // Add user message
+        const userMessage = {
+            id: `msg-${Date.now()}`,
+            role: 'user' as const,
+            content: question,
+            timestamp: new Date().toISOString(),
+        };
+
+        addChatMessage(userMessage);
+        setInputValue('');
+
+        setIsTyping(true);
+
+        try {
+            setError(null);
+            const selectedSourceNames = sources
+                .filter((source) => source.selected)
+                .map((source) => source.title);
+
+            const result = await apiService.chatNotebook(activeNotebookId, {
+                question,
+                source_names: selectedSourceNames.length > 0 ? selectedSourceNames : undefined,
+            });
+
+            const aiMessage = {
+                id: `msg-${Date.now()}`,
+                role: 'assistant' as const,
+                content: result.answer,
+                citations: result.citations.map((_, index) => index + 1),
+                citationDetails: result.citations,
+                timestamp: new Date().toISOString(),
+            };
+
+            addChatMessage(aiMessage);
+        } catch {
+            addChatMessage({
+                id: `msg-${Date.now()}-error`,
+                role: 'assistant',
+                content: 'Không thể gọi API chat. Vui lòng kiểm tra backend và thử lại.',
+                timestamp: new Date().toISOString(),
+            });
+            setError('Gọi API chat thất bại.');
+        } finally {
+            setIsTyping(false);
+        }
+    };
+
+    // Handle Enter key
+    const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSendMessage();
+        }
+    };
+
+    // Focus textarea on mount
+    useEffect(() => {
+        textareaRef.current?.focus();
+    }, []);
+
+    return (
+        <div className="flex flex-col h-full min-h-0 bg-white border-r border-gray-200">
+            {/* CHAT MESSAGES CONTAINER */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-4">
+                {chatMessages.length === 0 ? (
+                    <div className="flex items-center justify-center h-full">
+                        <div className="text-center">
+                            <h2 className="text-xl font-semibold text-gray-900 mb-2">
+                                Bắt đầu hội thoại
+                            </h2>
+                            <p className="text-sm text-gray-600">
+                                Hỏi câu hỏi về các tài liệu của bạn
+                            </p>
+                        </div>
+                    </div>
+                ) : (
+                    chatMessages.map((msg) => (
+                        <div
+                            key={msg.id}
+                            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                        >
+                            <div
+                                className={`max-w-xs md:max-w-md lg:max-w-lg px-4 py-3 rounded-lg shadow-sm ${msg.role === 'user'
+                                    ? 'bg-blue-500 text-white rounded-br-none'
+                                    : 'bg-gray-100 text-gray-900 rounded-bl-none'
+                                    }`}
+                            >
+                                {msg.role === 'assistant' ? (
+                                    <div className="prose prose-sm max-w-none text-gray-800 prose-headings:font-semibold prose-p:my-0 prose-table:my-3 prose-th:border prose-th:border-gray-200 prose-th:bg-gray-50 prose-th:px-3 prose-th:py-2 prose-td:border prose-td:border-gray-100 prose-td:px-3 prose-td:py-2">
+                                        {renderAssistantContent(msg.content, msg.citationDetails || [])}
+                                    </div>
+                                ) : (
+                                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                )}
+                            </div>
+                        </div>
+                    ))
+                )}
+
+                {/* TYPING INDICATOR */}
+                {isTyping && (
+                    <div className="flex justify-start">
+                        <div className="bg-gray-100 text-gray-900 px-4 py-3 rounded-lg rounded-bl-none">
+                            <div className="flex gap-1">
+                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                                    style={{ animationDelay: '0.1s' }}
+                                />
+                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                                    style={{ animationDelay: '0.2s' }}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                <div ref={messagesEndRef} />
+            </div>
+
+            {/* CHAT INPUT */}
+            <div className="flex-shrink-0 border-t border-gray-200 p-4">
+                <div className="flex items-end gap-3">
+                    <textarea
+                        ref={textareaRef}
+                        value={inputValue}
+                        onChange={handleTextareaChange}
+                        onKeyDown={handleKeyDown}
+                        placeholder="Nhập câu hỏi..."
+                        style={{ height: textareaHeight }}
+                        className="flex-1 px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg resize-none text-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 max-h-40"
+                    />
+                    <button
+                        onClick={handleSendMessage}
+                        disabled={!inputValue.trim() || isTyping}
+                        className="flex-shrink-0 p-2 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 text-white rounded-lg transition-colors"
+                        title="Gửi (Enter)"
+                    >
+                        <Send className="w-5 h-5" />
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default ChatArea;
