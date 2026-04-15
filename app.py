@@ -13,7 +13,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 st.set_page_config(page_title="SmartDoc AI", page_icon="📄", layout="wide")
 
-
 def init_state() -> None:
 	defaults = {
 		"retriever": None,

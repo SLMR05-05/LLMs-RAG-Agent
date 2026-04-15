@@ -42,7 +42,7 @@ pip install -r requirement_simplified.txt
 
 ```bash
 ollama pull nomic-embed-text
-ollama pull qwen2.5:7b
+ollama pull qwen2.5:1.5b
 ```
 
 ## Chay ung dung
