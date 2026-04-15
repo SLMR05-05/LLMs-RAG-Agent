@@ -5,6 +5,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Tuple
+from docx import Document
 
 import easyocr
 import numpy as np
@@ -16,6 +17,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_community.document_loaders import PDFPlumberLoader
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document as LC_Document
 
 
 st.set_page_config(page_title="SmartDoc AI", page_icon="📄", layout="wide")
@@ -182,6 +184,13 @@ def gather_images_from_uploaded_files(files):
 			images.append((uploaded_file.name, content))
 	return images
 
+def read_word_file(file_path: str) -> str:
+    doc = Document(file_path)
+    full_text = []
+    for para in doc.paragraphs:
+        full_text.append(para.text)
+    return "\n".join(full_text)
+
 
 def ask_rag(question: str, retriever, model_name: str) -> Tuple[str, List[Dict[str, str]]]:
 	prompt = build_prompt(is_vietnamese(question))
@@ -252,41 +261,56 @@ def main() -> None:
 	st.title("SmartDoc AI - Intelligent Document Q&A")
 	st.write("Upload a PDF and ask questions about its content.")
 
-	uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+	uploaded_file = st.file_uploader("Upload PDF or Word Document", type=["pdf", "docx"])
 
 	if uploaded_file is not None:
 		file_key = f"{uploaded_file.name}:{uploaded_file.size}"
+		suffix = Path(uploaded_file.name).suffix.lower()
 		should_process = st.session_state.active_file != file_key
 
 		if should_process:
-			with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+			with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
 				tmp_file.write(uploaded_file.getvalue())
-				temp_pdf_path = tmp_file.name
-
+				temp_file_path = tmp_file.name
 			try:
 				with st.spinner("Processing PDF: loading, splitting, and indexing..."):
-					retriever, vector_store, num_pages, num_chunks = build_retriever(
-						temp_pdf_path,
-						chunk_size,
-						chunk_overlap,
-						top_k,
+					if suffix == ".pdf":
+						loader = PDFPlumberLoader(temp_file_path)
+						docs = loader.load()
+					elif suffix == ".docx":
+						word_doc = Document(temp_file_path)
+						full_text = "\n".join([para.text for para in word_doc.paragraphs])
+						docs = [LC_Document(page_content=full_text, metadata={"source": uploaded_file.name, "page": "1"})]
+					else:
+						st.error("Unsupported file format.")
+						st.stop()
+
+					splitter = RecursiveCharacterTextSplitter(
+						chunk_size=chunk_size,
+						chunk_overlap=chunk_overlap,
+					)
+					chunks = splitter.split_documents(docs)
+
+					embedder = get_embedder()
+					vector_store = FAISS.from_documents(chunks, embedder)
+					retriever = vector_store.as_retriever(
+						search_type="similarity",
+						search_kwargs={"k": top_k},
 					)
 
 				st.session_state.retriever = retriever
 				st.session_state.vector_store = vector_store
 				st.session_state.active_file = file_key
 
-				st.success(
-					f"PDF indexed successfully. Pages: {num_pages}, chunks: {num_chunks}, top-k: {top_k}."
-				)
+				st.success(f"File {uploaded_file.name} indexed. Chunks: {len(chunks)}")
 			except Exception as exc:
 				st.error(
 					"Failed to process document. Please ensure the PDF is valid and dependencies are installed."
 				)
 				st.exception(exc)
 			finally:
-				if os.path.exists(temp_pdf_path):
-					os.remove(temp_pdf_path)
+				if os.path.exists(temp_file_path):
+					os.remove(temp_file_path)
 
 	st.divider()
 	st.subheader("Image OCR")
