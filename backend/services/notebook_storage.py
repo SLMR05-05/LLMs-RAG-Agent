@@ -208,6 +208,138 @@ class NotebookStorage:
                 (notebook_id,),
             ).fetchall()
 
+    def get_source_document(self, notebook_id: str, document_id: str) -> Optional[sqlite3.Row]:
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT
+                    document_id,
+                    notebook_id,
+                    source_name,
+                    source_type,
+                    file_hash,
+                    upload_path,
+                    page_count,
+                    file_size_bytes,
+                    created_at
+                FROM source_documents
+                WHERE notebook_id = ? AND document_id = ?
+                """,
+                (notebook_id, document_id),
+            ).fetchone()
+
+    def get_source_document_by_id(self, document_id: str) -> Optional[sqlite3.Row]:
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT
+                    document_id,
+                    notebook_id,
+                    source_name,
+                    source_type,
+                    file_hash,
+                    upload_path,
+                    page_count,
+                    file_size_bytes,
+                    created_at
+                FROM source_documents
+                WHERE document_id = ?
+                """,
+                (document_id,),
+            ).fetchone()
+
+    def rename_source_document(self, document_id: str, source_name: str) -> Optional[sqlite3.Row]:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE source_documents
+                SET source_name = ?
+                WHERE document_id = ?
+                """,
+                (source_name, document_id),
+            )
+            conn.execute(
+                """
+                UPDATE vector_entries
+                SET source_name = ?
+                WHERE chunk_id IN (
+                    SELECT chunk_id
+                    FROM chunks
+                    WHERE document_id = ?
+                )
+                """,
+                (source_name, document_id),
+            )
+            return conn.execute(
+                """
+                SELECT
+                    document_id,
+                    notebook_id,
+                    source_name,
+                    source_type,
+                    file_hash,
+                    upload_path,
+                    page_count,
+                    file_size_bytes,
+                    created_at
+                FROM source_documents
+                WHERE document_id = ?
+                """,
+                (document_id,),
+            ).fetchone()
+
+    def delete_source_document(self, document_id: str) -> Optional[sqlite3.Row]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    document_id,
+                    notebook_id,
+                    source_name,
+                    source_type,
+                    file_hash,
+                    upload_path,
+                    page_count,
+                    file_size_bytes,
+                    created_at
+                FROM source_documents
+                WHERE document_id = ?
+                """,
+                (document_id,),
+            ).fetchone()
+
+            if row is None:
+                return None
+
+            conn.execute(
+                """
+                DELETE FROM source_documents
+                WHERE document_id = ?
+                """,
+                (document_id,),
+            )
+            return row
+
+    def list_chunks_for_document(self, notebook_id: str, document_id: str) -> list[sqlite3.Row]:
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT
+                    chunk_id,
+                    notebook_id,
+                    document_id,
+                    chunk_index,
+                    page_number,
+                    text_content,
+                    metadata_json,
+                    created_at
+                FROM chunks
+                WHERE notebook_id = ? AND document_id = ?
+                ORDER BY chunk_index ASC
+                """,
+                (notebook_id, document_id),
+            ).fetchall()
+
     def insert_chunk(
         self,
         chunk_id: str,
@@ -378,6 +510,25 @@ class NotebookStorage:
                 """,
                 (notebook_id, session_id, limit),
             ).fetchall()
+
+    def delete_chat_history(self, notebook_id: str) -> int:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM chat_messages
+                WHERE notebook_id = ?
+                """,
+                (notebook_id,),
+            )
+            conn.execute(
+                """
+                DELETE FROM chat_sessions
+                WHERE notebook_id = ?
+                """,
+                (notebook_id,),
+            )
+            deleted_count = conn.execute("SELECT changes() AS deleted_count").fetchone()
+        return int(deleted_count["deleted_count"] if deleted_count is not None else 0)
 
     def validate_page_alignment(
         self,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class NotebookCreateRequest(BaseModel):
@@ -32,6 +32,41 @@ class SourceUploadResponse(BaseModel):
     status: Optional[str] = None
 
 
+class WebSourceRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+
+
+class WebSourceResponse(BaseModel):
+    notebook_id: str
+    job_id: str
+    status: str
+
+
+class SourceRenameRequest(BaseModel):
+    source_name: str = Field(min_length=1, max_length=500)
+
+
+class SourceManageResponse(BaseModel):
+    notebook_id: str
+    document_id: str
+    source_name: str
+    source_type: str
+    status: str
+
+
+class ChatSettings(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    response_length: Literal['short', 'medium', 'long'] = Field(default='medium', alias='responseLength')
+    roleplay: str = Field(default='', alias='roleplay')
+    mode: Literal['normal', 'study_guide', 'critical_thinking'] = Field(default='normal', alias='mode')
+
+
+class ChatClearResponse(BaseModel):
+    notebook_id: str
+    status: str
+
+
 class SourceItem(BaseModel):
     document_id: str
     source_name: str
@@ -47,6 +82,26 @@ class SourcesResponse(BaseModel):
     notebook_id: str
     total: int
     sources: List[SourceItem]
+
+
+class SourceChunkItem(BaseModel):
+    chunk_id: str
+    chunk_index: int
+    page_number: Optional[int] = None
+    text_content: str
+    created_at: Optional[str] = None
+
+
+class SourceDetailResponse(BaseModel):
+    notebook_id: str
+    document_id: str
+    source_name: str
+    source_type: str
+    created_at: Optional[str] = None
+    page_count: Optional[int] = None
+    file_size_bytes: Optional[int] = None
+    chunks: List[SourceChunkItem]
+    parsed_markdown: str
 
 
 class IndexRequest(BaseModel):
@@ -67,12 +122,15 @@ class Citation(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     session_id: Optional[str] = None
     question: str = Field(min_length=2)
     model_name: str = Field(default="qwen2.5:1.5b")
     top_k: int = Field(default=4, ge=1, le=20)
     source_names: Optional[List[str]] = None
     answer_language: Optional[Literal['vi', 'en']] = None
+    chat_settings: Optional[ChatSettings] = Field(default=None, alias='chatSettings')
 
 
 class ChatResponse(BaseModel):

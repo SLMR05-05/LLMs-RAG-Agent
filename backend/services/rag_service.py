@@ -66,21 +66,81 @@ class RAGService:
     def _hash_bytes(self, content: bytes) -> str:
         return hashlib.sha256(content).hexdigest()
 
-    def _build_prompt_template(self, answer_language: str) -> PromptTemplate:
+    def extract_text_from_image_bytes(self, image_bytes: bytes) -> str:
+        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        image_array = np.array(image)
+        lines = self._get_ocr_reader().readtext(image_array, detail=0)
+        return "\n".join(lines).strip()
+
+    def _build_system_prompt(self, answer_language: str, chat_settings: Optional[dict[str, str]] = None) -> str:
+        settings = chat_settings or {}
+        response_length = settings.get("response_length", "medium")
+        roleplay = (settings.get("roleplay") or "").strip()
+        mode = settings.get("mode", "normal")
+
+        if answer_language == "vi":
+            length_instruction = {
+                "short": "Hãy trả lời cực kỳ ngắn gọn dưới 3 câu.",
+                "medium": "Hãy trả lời vừa phải, khoảng 3-5 câu.",
+                "long": "Hãy trả lời chi tiết hơn, khoảng 6-10 câu, nhưng vẫn tập trung vào thông tin cần thiết.",
+            }[response_length]
+            mode_instruction = {
+                "normal": "Trả lời bình thường, rõ ràng và chính xác.",
+                "study_guide": "Ưu tiên cấu trúc như một tài liệu hướng dẫn học tập: giải thích khái niệm, chia bước, thêm mẹo ghi nhớ khi phù hợp.",
+                "critical_thinking": "Ưu tiên phân tích phản biện: nêu giả định, điểm yếu, rủi ro, và câu hỏi cần kiểm chứng.",
+            }[mode]
+            base = [
+                "Bạn là trợ lý Local RAG. Chỉ trả lời dựa trên ngữ cảnh được cung cấp.",
+                "Bạn được cung cấp ngữ cảnh từ nhiều nguồn tài liệu khác nhau. Khi trả lời, bắt buộc phải TRÍCH DẪN RÕ RÀNG thông tin lấy từ tài liệu nào. TUYỆT ĐỐI KHÔNG trộn lẫn, tự ý kết nối các sự kiện của tài liệu này sang tài liệu khác nếu chúng không liên quan trong văn bản.",
+                "Khi sử dụng thông tin từ nhiều tài liệu, hãy giữ ranh giới giữa các nguồn và chỉ kết luận khi các nguồn thực sự hỗ trợ cho cùng một điểm.",
+                length_instruction,
+                mode_instruction,
+                "Nếu ngữ cảnh không đủ, hãy nói rõ là không có đủ thông tin.",
+                "Hãy dùng ký hiệu trích dẫn [1], [2], [3] tương ứng với các khối ngữ cảnh được cung cấp.",
+                "Luôn trả lời bằng tiếng Việt, trừ khi người dùng yêu cầu khác.",
+            ]
+        else:
+            length_instruction = {
+                "short": "Keep the answer extremely concise, under 3 sentences.",
+                "medium": "Keep the answer moderate, around 3-5 sentences.",
+                "long": "Provide a deeper answer, around 6-10 sentences, while staying focused on the necessary information.",
+            }[response_length]
+            mode_instruction = {
+                "normal": "Answer normally, clearly, and accurately.",
+                "study_guide": "Prefer a study-guide style: explain concepts, break steps down, and add memory aids when relevant.",
+                "critical_thinking": "Prefer critical analysis: surface assumptions, weaknesses, risks, and questions that need verification.",
+            }[mode]
+            base = [
+                "You are a Local RAG assistant. Answer only from the provided context.",
+                "You are given context from multiple different documents. When answering, you must clearly cite which document each fact comes from. DO NOT mix, merge, or invent connections between unrelated facts from different documents.",
+                "When using multiple sources, keep them separate and only combine them when the text itself supports that relationship.",
+                length_instruction,
+                mode_instruction,
+                "If the context is insufficient, say so clearly.",
+                "Use citation markers like [1], [2], [3] that match the numbered context blocks provided.",
+                "Always answer in English unless the user explicitly asks for another language.",
+            ]
+
+        if roleplay:
+            if answer_language == "vi":
+                base.insert(3, f"Bạn đang đóng vai: {roleplay}.")
+            else:
+                base.insert(3, f"You are roleplaying as: {roleplay}.")
+
+        return "\n".join(base)
+
+    def _build_prompt_template(self, answer_language: str, chat_settings: Optional[dict[str, str]] = None) -> PromptTemplate:
+        system_prompt = self._build_system_prompt(answer_language, chat_settings)
         if answer_language == "vi":
             template = (
-                "Ban chi duoc tra loi dua tren ngu canh da cung cap. "
-                "Neu khong du du lieu, hay noi ro la khong biet. "
-                "Bat buoc tra loi bang tieng Viet, cung ngong ngu voi cau hoi.\n\n"
+                f"{system_prompt}\n\n"
                 "Ngu canh:\n{context}\n\n"
                 "Cau hoi: {question}\n\n"
                 "Tra loi ngan gon 3-5 cau, uu tien thong tin chinh xac tu nguon."
             )
         else:
             template = (
-                "Answer strictly based on the provided context. "
-                "If context is insufficient, clearly say you do not know. "
-                "You must answer in English, matching the user's question language.\n\n"
+                f"{system_prompt}\n\n"
                 "Context:\n{context}\n\n"
                 "Question: {question}\n\n"
                 "Keep the answer concise in 3-5 sentences and grounded in the sources."
@@ -175,6 +235,78 @@ class RAGService:
             "file_hash": file_hash,
             "upload_path": str(upload_path),
             "file_size_bytes": len(content),
+        }
+
+    def save_web_source(self, notebook_id: str, source_url: str, extracted_text: str) -> dict:
+        if not extracted_text.strip():
+            raise ValueError("No textual content extracted from URL")
+
+        dirs = self.storage.get_notebook_dirs(notebook_id)
+        dirs["uploads"].mkdir(parents=True, exist_ok=True)
+
+        content = extracted_text.strip().encode("utf-8")
+        file_hash = self._hash_bytes(content)
+        disk_name = f"{file_hash}.txt"
+        upload_path = dirs["uploads"] / disk_name
+        upload_path.write_bytes(content)
+
+        document_id = uuid.uuid4().hex
+        self.storage.upsert_source_document(
+            document_id=document_id,
+            notebook_id=notebook_id,
+            source_name=source_url,
+            source_type="web_link",
+            file_hash=file_hash,
+            upload_path=str(upload_path),
+            page_count=1,
+            file_size_bytes=len(content),
+        )
+        return {
+            "document_id": document_id,
+            "source_name": source_url,
+            "source_type": "web_link",
+            "file_hash": file_hash,
+            "upload_path": str(upload_path),
+            "file_size_bytes": len(content),
+        }
+
+    def delete_source(self, document_id: str) -> dict:
+        source = self.storage.get_source_document_by_id(document_id)
+        if source is None:
+            raise ValueError("Source not found")
+
+        notebook_id = str(source["notebook_id"])
+        upload_path = Path(str(source["upload_path"]))
+
+        deleted = self.storage.delete_source_document(document_id=document_id)
+        if deleted is None:
+            raise ValueError("Source not found")
+
+        if upload_path.exists() and upload_path.is_file():
+            upload_path.unlink(missing_ok=True)
+
+        remaining_sources = self.storage.list_source_documents(notebook_id)
+        if remaining_sources:
+            self.index_notebook(
+                notebook_id=notebook_id,
+                source_ids=None,
+                chunk_size=1000,
+                chunk_overlap=100,
+            )
+        else:
+            self.storage.clear_index_data(notebook_id)
+            dirs = self.storage.get_notebook_dirs(notebook_id)
+            index_dir = dirs["vector_db"]
+            for filename in ("index.faiss", "index.pkl"):
+                file_path = index_dir / filename
+                if file_path.exists() and file_path.is_file():
+                    file_path.unlink(missing_ok=True)
+
+        return {
+            "notebook_id": notebook_id,
+            "document_id": str(source["document_id"]),
+            "source_name": str(source["source_name"]),
+            "source_type": str(source["source_type"]),
         }
 
     def _load_or_create_vector_store(self, notebook_id: str) -> FAISS:
@@ -289,18 +421,53 @@ class RAGService:
         }
 
     def _rewrite_query(self, notebook_id: str, session_id: str, question: str) -> str:
-        history = self.storage.get_recent_chat_messages(notebook_id=notebook_id, session_id=session_id, limit=5)
+        history = self.storage.get_recent_chat_messages(notebook_id=notebook_id, session_id=session_id, limit=10)
         if not history:
             return question
 
-        history_lines = [f"{item['role']}: {item['content']}" for item in history]
-        prompt = (
-            "Rewrite the follow-up question into a standalone query using the recent chat history. "
-            "Return only the rewritten query.\n\n"
-            f"Chat history:\n{os.linesep.join(history_lines)}\n\n"
-            f"Question: {question}\n"
-            "Rewritten query:"
-        )
+        paired_history: list[tuple[str, str]] = []
+        pending_user: str | None = None
+        for item in history:
+            role = str(item['role'])
+            content = str(item['content']).strip()
+            if not content:
+                continue
+
+            if role == 'user':
+                pending_user = content
+                continue
+
+            if role == 'assistant' and pending_user:
+                paired_history.append((pending_user, content))
+                pending_user = None
+
+        if not paired_history and history:
+            history_lines = [f"{item['role']}: {item['content']}" for item in history]
+        else:
+            recent_pairs = paired_history[-5:]
+            history_lines = []
+            for index, (user_text, assistant_text) in enumerate(recent_pairs, start=1):
+                history_lines.append(f"Pair {index} - User: {user_text}")
+                history_lines.append(f"Pair {index} - Assistant: {assistant_text}")
+
+        if self._is_vietnamese(question):
+            prompt = (
+                "Dua vao lich su hoi thoai sau, hay viet lai cau hoi cuoi cung cua nguoi dung "
+                "thanh mot cau hoi doc lap, day du chu ngu, vi ngu va tu khoa de tim kiem tai lieu. "
+                "Chi tra ve DUY NHAT cau hoi da viet lai, khong giai thich them.\n\n"
+                f"Lich su hoi thoai:\n{os.linesep.join(history_lines)}\n\n"
+                f"Cau hoi goc: {question}\n"
+                "Cau hoi viet lai:"
+            )
+        else:
+            prompt = (
+                "Based on the conversation history below, rewrite the user's latest question into a standalone query "
+                "with complete subject, predicate, and document-retrieval keywords. "
+                "Return ONLY the rewritten question with no extra explanation.\n\n"
+                f"Conversation history:\n{os.linesep.join(history_lines)}\n\n"
+                f"Original question: {question}\n"
+                "Rewritten question:"
+            )
 
         response = self._ollama_client().generate(model="qwen2.5:1.5b", prompt=prompt)
         if hasattr(response, "response"):
@@ -312,10 +479,10 @@ class RAGService:
 
     def _build_chat_context(self, docs: List[Document]) -> str:
         sections = []
-        for doc in docs:
+        for index, doc in enumerate(docs, start=1):
             source_name = doc.metadata.get("source_name", "unknown")
             page_number = doc.metadata.get("page_number") or doc.metadata.get("page") or "N/A"
-            sections.append(f"[source={source_name} page={page_number}]\n{doc.page_content}")
+            sections.append(f"[{index}] source={source_name} page={page_number}\n{doc.page_content}")
         return "\n\n".join(sections)
 
     def chat(
@@ -327,6 +494,7 @@ class RAGService:
         session_id: Optional[str],
         source_names: Optional[List[str]],
         answer_language: Optional[str] = None,
+        chat_settings: Optional[dict[str, str]] = None,
     ) -> dict:
         if not self.storage.notebook_exists(notebook_id):
             raise ValueError("Notebook not found")
@@ -350,13 +518,11 @@ class RAGService:
                 raise ValueError("Notebook indexing failed. Please try again.")
 
         session_id = self.storage.ensure_chat_session(notebook_id=notebook_id, session_id=session_id)
-        rewritten_question = question
-        if self._should_rewrite_query(question):
-            rewritten_question = self._rewrite_query(
-                notebook_id=notebook_id,
-                session_id=session_id,
-                question=question,
-            )
+        rewritten_question = self._rewrite_query(
+            notebook_id=notebook_id,
+            session_id=session_id,
+            question=question,
+        )
 
         vector_store = FAISS.load_local(
             folder_path=str(dirs["vector_db"]),
@@ -368,9 +534,11 @@ class RAGService:
         if source_names:
             metadata_filter["source_name"] = {"$in": source_names}
 
+        retrieval_k = max(top_k, 8 if len(question.split()) <= 8 else 5)
+
         docs = vector_store.similarity_search(
             query=rewritten_question,
-            k=top_k,
+            k=retrieval_k,
             filter=metadata_filter,
         )
 
@@ -380,7 +548,7 @@ class RAGService:
         else:
             context = self._build_chat_context(docs)
             resolved_language = answer_language if answer_language in {"vi", "en"} else self._detect_answer_language(question)
-            prompt_template = self._build_prompt_template(resolved_language)
+            prompt_template = self._build_prompt_template(resolved_language, chat_settings)
             prompt = prompt_template.format(context=context, question=rewritten_question)
 
             response = self._ollama_client().generate(

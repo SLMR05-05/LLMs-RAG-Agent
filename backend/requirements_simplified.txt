@@ -21,3 +21,6 @@ alembic
 pytest
 pytest-asyncio
 httpx
+requests
+trafilatura
+beautifulsoup4
