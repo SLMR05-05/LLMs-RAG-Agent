@@ -1,4 +1,4 @@
-import type { Notebook, Source } from '../store/useAppStore';
+import type { ChatMessage, Notebook, Source } from '../store/useAppStore';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -28,6 +28,7 @@ export type ChatPayload = {
     model_name?: string;
     top_k?: number;
     source_names?: string[];
+    answer_language?: 'vi' | 'en';
 };
 
 export type ChatApiResponse = {
@@ -39,6 +40,17 @@ export type ChatApiResponse = {
         source_name: string;
         page?: number | null;
         snippet: string;
+    }>;
+};
+
+export type ChatMessagesApiResponse = {
+    notebook_id: string;
+    session_id?: string | null;
+    messages: Array<{
+        message_id: string;
+        role: 'user' | 'assistant' | 'system';
+        content: string;
+        created_at?: string | null;
     }>;
 };
 
@@ -79,8 +91,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     });
 
     if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(detail || `Request failed with status ${response.status}`);
+        let detailMessage = '';
+
+        try {
+            const payload = await response.json();
+            if (typeof payload?.detail === 'string') {
+                detailMessage = payload.detail;
+            } else if (typeof payload?.detail?.message === 'string') {
+                detailMessage = payload.detail.message;
+            } else {
+                detailMessage = JSON.stringify(payload);
+            }
+        } catch {
+            detailMessage = await response.text();
+        }
+
+        throw new Error(detailMessage || `Request failed with status ${response.status}`);
     }
 
     return response.json() as Promise<T>;
@@ -159,8 +185,32 @@ export const apiService = {
                 model_name: payload.model_name || 'qwen2.5:1.5b',
                 top_k: payload.top_k || 4,
                 source_names: payload.source_names,
+                answer_language: payload.answer_language,
             }),
         });
+    },
+
+    async getNotebookChatMessages(
+        notebookId: string
+    ): Promise<{ sessionId: string | null; messages: ChatMessage[] }> {
+        const data = await request<ChatMessagesApiResponse>(`/notebooks/${notebookId}/chat/messages`);
+        const uiMessages = data.messages
+            .filter(
+                (item): item is ChatMessagesApiResponse['messages'][number] & {
+                    role: 'user' | 'assistant';
+                } => item.role === 'user' || item.role === 'assistant'
+            )
+            .map((item) => ({
+                id: item.message_id,
+                role: item.role,
+                content: item.content,
+                timestamp: item.created_at || new Date().toISOString(),
+            }));
+
+        return {
+            sessionId: data.session_id ?? null,
+            messages: uiMessages,
+        };
     },
 
     async uploadNotebookSources(notebookId: string, files: File[]): Promise<UploadApiResponse> {

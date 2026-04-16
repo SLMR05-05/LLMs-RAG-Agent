@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { useAppStore } from '../../store/useAppStore';
 import { Send } from 'lucide-react';
 import { apiService } from '../../services/api';
+import { detectQuestionLanguage } from '../../utils/language';
 import CitationBadge from './CitationBadge';
 
 type CitationDetail = {
@@ -123,6 +124,8 @@ export const ChatArea: FC = () => {
         setIsTyping,
         activeNotebookId,
         sources,
+        chatSessionByNotebook,
+        setChatSessionForNotebook,
         setError,
     } = useAppStore();
 
@@ -130,6 +133,12 @@ export const ChatArea: FC = () => {
     const [textareaHeight, setTextareaHeight] = useState('44px');
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const hasSources = sources.length > 0;
+    const selectedSourceNames = sources
+        .filter((source) => source.selected)
+        .map((source) => source.title);
+    const canChat = Boolean(activeNotebookId) && hasSources;
+    const activeSessionId = activeNotebookId ? chatSessionByNotebook[activeNotebookId] : undefined;
 
     // Auto-scroll to bottom on new messages
     useEffect(() => {
@@ -150,7 +159,7 @@ export const ChatArea: FC = () => {
     // Handle sending message
     const handleSendMessage = async () => {
         const question = inputValue.trim();
-        if (!question || !activeNotebookId) return;
+        if (!question || !activeNotebookId || !canChat) return;
 
         // Reset textarea
         setTextareaHeight('44px');
@@ -170,14 +179,14 @@ export const ChatArea: FC = () => {
 
         try {
             setError(null);
-            const selectedSourceNames = sources
-                .filter((source) => source.selected)
-                .map((source) => source.title);
-
             const result = await apiService.chatNotebook(activeNotebookId, {
                 question,
+                session_id: activeSessionId,
                 source_names: selectedSourceNames.length > 0 ? selectedSourceNames : undefined,
+                answer_language: detectQuestionLanguage(question),
             });
+
+            setChatSessionForNotebook(activeNotebookId, result.session_id);
 
             const aiMessage = {
                 id: `msg-${Date.now()}`,
@@ -189,14 +198,19 @@ export const ChatArea: FC = () => {
             };
 
             addChatMessage(aiMessage);
-        } catch {
+        } catch (error) {
+            const message =
+                error instanceof Error && error.message.trim().length > 0
+                    ? error.message
+                    : 'Không thể gọi API chat. Vui lòng kiểm tra backend và thử lại.';
+
             addChatMessage({
                 id: `msg-${Date.now()}-error`,
                 role: 'assistant',
-                content: 'Không thể gọi API chat. Vui lòng kiểm tra backend và thử lại.',
+                content: message,
                 timestamp: new Date().toISOString(),
             });
-            setError('Gọi API chat thất bại.');
+            setError(message);
         } finally {
             setIsTyping(false);
         }
@@ -223,10 +237,12 @@ export const ChatArea: FC = () => {
                     <div className="flex items-center justify-center h-full">
                         <div className="text-center">
                             <h2 className="text-xl font-semibold text-gray-900 mb-2">
-                                Bắt đầu hội thoại
+                                {hasSources ? 'Bắt đầu hội thoại' : 'Chưa có nguồn dữ liệu'}
                             </h2>
                             <p className="text-sm text-gray-600">
-                                Hỏi câu hỏi về các tài liệu của bạn
+                                {hasSources
+                                    ? 'Hỏi câu hỏi về các tài liệu của bạn'
+                                    : 'Vui lòng thêm ít nhất một file nguồn ở cột bên trái để bắt đầu chat.'}
                             </p>
                         </div>
                     </div>
@@ -276,19 +292,25 @@ export const ChatArea: FC = () => {
 
             {/* CHAT INPUT */}
             <div className="flex-shrink-0 border-t border-gray-200 p-4">
+                {!hasSources && (
+                    <p className="mb-3 text-xs font-medium text-amber-700">
+                        Bạn cần thêm nguồn tài liệu trước khi đặt câu hỏi.
+                    </p>
+                )}
                 <div className="flex items-end gap-3">
                     <textarea
                         ref={textareaRef}
                         value={inputValue}
                         onChange={handleTextareaChange}
                         onKeyDown={handleKeyDown}
-                        placeholder="Nhập câu hỏi..."
+                        disabled={!canChat || isTyping}
+                        placeholder={hasSources ? 'Nhập câu hỏi...' : 'Thêm nguồn tài liệu để bắt đầu chat'}
                         style={{ height: textareaHeight }}
-                        className="flex-1 px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg resize-none text-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 max-h-40"
+                        className="flex-1 px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg resize-none text-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 max-h-40 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
                     />
                     <button
                         onClick={handleSendMessage}
-                        disabled={!inputValue.trim() || isTyping}
+                        disabled={!inputValue.trim() || !canChat || isTyping}
                         className="flex-shrink-0 p-2 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 text-white rounded-lg transition-colors"
                         title="Gửi (Enter)"
                     >

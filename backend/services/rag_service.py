@@ -66,29 +66,52 @@ class RAGService:
     def _hash_bytes(self, content: bytes) -> str:
         return hashlib.sha256(content).hexdigest()
 
-    def _build_prompt_template(self, is_vi: bool) -> PromptTemplate:
-        if is_vi:
+    def _build_prompt_template(self, answer_language: str) -> PromptTemplate:
+        if answer_language == "vi":
             template = (
                 "Ban chi duoc tra loi dua tren ngu canh da cung cap. "
-                "Neu khong du du lieu, hay noi ro la khong biet.\n\n"
+                "Neu khong du du lieu, hay noi ro la khong biet. "
+                "Bat buoc tra loi bang tieng Viet, cung ngong ngu voi cau hoi.\n\n"
                 "Ngu canh:\n{context}\n\n"
                 "Cau hoi: {question}\n\n"
-                "Tra loi ngan gon va co trich dan theo nguon."
+                "Tra loi ngan gon 3-5 cau, uu tien thong tin chinh xac tu nguon."
             )
         else:
             template = (
                 "Answer strictly based on the provided context. "
-                "If context is insufficient, clearly say you do not know.\n\n"
+                "If context is insufficient, clearly say you do not know. "
+                "You must answer in English, matching the user's question language.\n\n"
                 "Context:\n{context}\n\n"
                 "Question: {question}\n\n"
-                "Give a concise answer with source-grounded statements."
+                "Keep the answer concise in 3-5 sentences and grounded in the sources."
             )
         return PromptTemplate(template=template, input_variables=["context", "question"])
 
     def _is_vietnamese(self, text: str) -> bool:
         chars = "aadeioouuyáàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ"
         lowered = text.lower()
-        return any(c in lowered for c in chars)
+        if any(c in lowered for c in chars):
+            return True
+
+        vi_keywords = {
+            "toi", "ban", "la", "khong", "duoc", "cua", "trong", "cho", "voi",
+            "nhung", "mot", "nhieu", "tai", "sao", "the", "nao", "bao", "nhieu",
+            "cau", "hoi", "nguon", "tai", "lieu",
+        }
+        tokens = {token.strip(".,!?;:()[]{}\"'") for token in lowered.split() if token.strip()}
+        return len(tokens.intersection(vi_keywords)) >= 2
+
+    def _detect_answer_language(self, question: str) -> str:
+        return "vi" if self._is_vietnamese(question) else "en"
+
+    def _should_rewrite_query(self, question: str) -> bool:
+        lowered = question.lower()
+        follow_up_markers = {
+            "it", "this", "that", "they", "them", "he", "she",
+            "no", "do", "day", "kia", "tren", "duoi", "tiep",
+        }
+        tokens = {token.strip(".,!?;:()[]{}\"'") for token in lowered.split() if token.strip()}
+        return len(tokens) <= 12 and len(tokens.intersection(follow_up_markers)) > 0
 
     def _parse_file_to_documents(self, file_path: Path, source_name: str, file_hash: str) -> Tuple[List[Document], int]:
         suffix = file_path.suffix.lower()
@@ -303,6 +326,7 @@ class RAGService:
         top_k: int,
         session_id: Optional[str],
         source_names: Optional[List[str]],
+        answer_language: Optional[str] = None,
     ) -> dict:
         if not self.storage.notebook_exists(notebook_id):
             raise ValueError("Notebook not found")
@@ -310,10 +334,29 @@ class RAGService:
         dirs = self.storage.get_notebook_dirs(notebook_id)
         index_file = dirs["vector_db"] / "index.faiss"
         if not index_file.exists():
-            raise ValueError("Notebook has no index yet. Call /index first.")
+            sources = self.storage.list_source_documents(notebook_id)
+            if not sources:
+                raise ValueError("Notebook has no source documents yet. Upload files first.")
+
+            # Auto-index once so chat can work immediately after upload.
+            self.index_notebook(
+                notebook_id=notebook_id,
+                source_ids=None,
+                chunk_size=1000,
+                chunk_overlap=100,
+            )
+
+            if not index_file.exists():
+                raise ValueError("Notebook indexing failed. Please try again.")
 
         session_id = self.storage.ensure_chat_session(notebook_id=notebook_id, session_id=session_id)
-        rewritten_question = self._rewrite_query(notebook_id=notebook_id, session_id=session_id, question=question)
+        rewritten_question = question
+        if self._should_rewrite_query(question):
+            rewritten_question = self._rewrite_query(
+                notebook_id=notebook_id,
+                session_id=session_id,
+                question=question,
+            )
 
         vector_store = FAISS.load_local(
             folder_path=str(dirs["vector_db"]),
@@ -336,13 +379,19 @@ class RAGService:
             citations = []
         else:
             context = self._build_chat_context(docs)
-            prompt_template = self._build_prompt_template(self._is_vietnamese(rewritten_question))
+            resolved_language = answer_language if answer_language in {"vi", "en"} else self._detect_answer_language(question)
+            prompt_template = self._build_prompt_template(resolved_language)
             prompt = prompt_template.format(context=context, question=rewritten_question)
 
             response = self._ollama_client().generate(
                 model=model_name,
                 prompt=prompt,
-                options={"temperature": 0.2, "top_p": 0.9, "repeat_penalty": 1.1},
+                options={
+                    "temperature": 0.1,
+                    "top_p": 0.85,
+                    "repeat_penalty": 1.05,
+                    "num_predict": 220,
+                },
             )
             if hasattr(response, "response"):
                 answer = response.response

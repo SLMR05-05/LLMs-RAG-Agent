@@ -348,6 +348,37 @@ class NotebookStorage:
             ).fetchall()
         return list(reversed(rows))
 
+    def get_latest_chat_session(self, notebook_id: str) -> Optional[sqlite3.Row]:
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT session_id, notebook_id, session_title, created_at
+                FROM chat_sessions
+                WHERE notebook_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (notebook_id,),
+            ).fetchone()
+
+    def list_chat_messages(
+        self,
+        notebook_id: str,
+        session_id: str,
+        limit: int = 200,
+    ) -> list[sqlite3.Row]:
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT message_id, role, content, created_at
+                FROM chat_messages
+                WHERE notebook_id = ? AND session_id = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (notebook_id, session_id, limit),
+            ).fetchall()
+
     def validate_page_alignment(
         self,
         notebook_id: str,

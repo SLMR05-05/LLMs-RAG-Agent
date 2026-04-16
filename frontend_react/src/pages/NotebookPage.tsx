@@ -10,6 +10,8 @@ export const NotebookPage: FC = () => {
     const { id } = useParams<{ id: string }>();
     const setActiveNotebook = useAppStore((s) => s.setActiveNotebook);
     const setSources = useAppStore((s) => s.setSources);
+    const setChatMessages = useAppStore((s) => s.setChatMessages);
+    const setChatSessionForNotebook = useAppStore((s) => s.setChatSessionForNotebook);
     const setError = useAppStore((s) => s.setError);
 
     useEffect(() => {
@@ -17,28 +19,35 @@ export const NotebookPage: FC = () => {
 
         let mounted = true;
 
-        const loadSources = async () => {
+        const loadNotebookData = async () => {
             try {
                 setError(null);
                 setActiveNotebook(id);
-                const sources = await apiService.getNotebookSources(id);
+                const [sources, chat] = await Promise.all([
+                    apiService.getNotebookSources(id),
+                    apiService.getNotebookChatMessages(id),
+                ]);
                 if (mounted) {
                     setSources(sources);
+                    setChatMessages(chat.messages);
+                    setChatSessionForNotebook(id, chat.sessionId);
                 }
             } catch {
                 if (mounted) {
                     setError('Không thể tải nguồn tài liệu của notebook này.');
                     setSources([]);
+                    setChatMessages([]);
+                    setChatSessionForNotebook(id, null);
                 }
             }
         };
 
-        loadSources();
+        void loadNotebookData();
 
         return () => {
             mounted = false;
         };
-    }, [id, setActiveNotebook, setError, setSources]);
+    }, [id, setActiveNotebook, setChatMessages, setChatSessionForNotebook, setError, setSources]);
 
     if (!id) {
         return null;

@@ -102,7 +102,10 @@ interface AppStore {
     selectAllSources: (selected: boolean) => void;
 
     chatMessages: ChatMessage[];
+    chatSessionByNotebook: Record<string, string>;
     addChatMessage: (message: ChatMessage) => void;
+    setChatMessages: (messages: ChatMessage[]) => void;
+    setChatSessionForNotebook: (notebookId: string, sessionId: string | null) => void;
     clearChat: () => void;
     isTyping: boolean;
     setIsTyping: (typing: boolean) => void;
@@ -175,28 +178,7 @@ export const useAppStore = create<AppStore>((set) => ({
         }
     },
 
-    sources: [
-        {
-            id: 'src-1',
-            title: 'University Admissions PRD',
-            type: 'file',
-            description: 'Technical Product Requirements Document',
-            selected: true,
-        },
-        {
-            id: 'src-2',
-            title: 'Database Schema Design',
-            type: 'web',
-            url: 'https://example.com/schema',
-            selected: true,
-        },
-        {
-            id: 'src-3',
-            title: 'Performance Benchmarks',
-            type: 'research',
-            selected: false,
-        },
-    ],
+    sources: [],
     setSources: (sources: Source[]) => set({ sources }),
     toggleSourceSelection: (sourceId: string) =>
         set((state: AppStore) => ({
@@ -210,10 +192,26 @@ export const useAppStore = create<AppStore>((set) => ({
         })),
 
     chatMessages: [],
+    chatSessionByNotebook: {},
     addChatMessage: (message: ChatMessage) =>
         set((state: AppStore) => ({
             chatMessages: [...state.chatMessages, message],
         })),
+    setChatMessages: (messages: ChatMessage[]) => set({ chatMessages: messages }),
+    setChatSessionForNotebook: (notebookId: string, sessionId: string | null) =>
+        set((state: AppStore) => {
+            if (!sessionId) {
+                const { [notebookId]: _, ...rest } = state.chatSessionByNotebook;
+                return { chatSessionByNotebook: rest };
+            }
+
+            return {
+                chatSessionByNotebook: {
+                    ...state.chatSessionByNotebook,
+                    [notebookId]: sessionId,
+                },
+            };
+        }),
     clearChat: () => set({ chatMessages: [] }),
     isTyping: false,
     setIsTyping: (typing: boolean) => set({ isTyping: typing }),

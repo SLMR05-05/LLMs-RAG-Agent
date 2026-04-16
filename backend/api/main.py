@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.schemas import (
     ChatRequest,
+    ChatMessageItem,
+    ChatMessagesResponse,
     ChatResponse,
     HealthResponse,
     IndexRequest,
@@ -295,6 +297,7 @@ def chat_notebook(
             top_k=payload.top_k,
             session_id=payload.session_id,
             source_names=payload.source_names,
+            answer_language=payload.answer_language,
         )
         return ChatResponse(**result)
     except ValueError as exc:
@@ -307,3 +310,18 @@ def chat_notebook(
                 "message": "Internal server error while processing chat request.",
             },
         ) from exc
+
+
+@app.get("/notebooks/{notebook_id}/chat/messages", response_model=ChatMessagesResponse)
+def get_chat_messages(notebook_id: str = Path(min_length=6)) -> ChatMessagesResponse:
+    if not storage.notebook_exists(notebook_id):
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    latest_session = storage.get_latest_chat_session(notebook_id)
+    if latest_session is None:
+        return ChatMessagesResponse(notebook_id=notebook_id, session_id=None, messages=[])
+
+    session_id = latest_session["session_id"]
+    rows = storage.list_chat_messages(notebook_id=notebook_id, session_id=session_id, limit=200)
+    messages = [ChatMessageItem(**dict(row)) for row in rows]
+    return ChatMessagesResponse(notebook_id=notebook_id, session_id=session_id, messages=messages)

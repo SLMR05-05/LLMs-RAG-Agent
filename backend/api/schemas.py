@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -72,6 +72,7 @@ class ChatRequest(BaseModel):
     model_name: str = Field(default="qwen2.5:1.5b")
     top_k: int = Field(default=4, ge=1, le=20)
     source_names: Optional[List[str]] = None
+    answer_language: Optional[Literal['vi', 'en']] = None
 
 
 class ChatResponse(BaseModel):
@@ -80,6 +81,19 @@ class ChatResponse(BaseModel):
     rewritten_question: str
     answer: str
     citations: List[Citation]
+
+
+class ChatMessageItem(BaseModel):
+    message_id: str
+    role: str
+    content: str
+    created_at: Optional[str] = None
+
+
+class ChatMessagesResponse(BaseModel):
+    notebook_id: str
+    session_id: Optional[str] = None
+    messages: List[ChatMessageItem]
 
 
 class JobResponse(BaseModel):
