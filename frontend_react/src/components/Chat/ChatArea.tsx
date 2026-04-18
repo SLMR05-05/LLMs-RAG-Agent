@@ -179,6 +179,7 @@ export const ChatArea: FC = () => {
 
         try {
             setError(null);
+            console.log('[ChatArea] Calling API with:', { question, activeSessionId });
             const result = await apiService.chatNotebook(activeNotebookId, {
                 question,
                 session_id: activeSessionId,
@@ -186,12 +187,27 @@ export const ChatArea: FC = () => {
                 answer_language: detectQuestionLanguage(question),
             });
 
+            console.log('[ChatArea] API response received:', {
+                answer_length: result.answer?.length,
+                answer_graph_length: result.answer_graph?.length,
+                answer_graph_value: result.answer_graph,
+                citations_count: result.citations?.length,
+            });
+
             setChatSessionForNotebook(activeNotebookId, result.session_id);
 
+            const hasGraphAnswer = result.answer_graph && result.answer_graph.trim().length > 0;
+            console.log('[ChatArea] Has graph answer:', hasGraphAnswer, 'answer_graph:', result.answer_graph?.substring(0, 100));
+            
+            const content = hasGraphAnswer 
+                ? `${result.answer}\n\n--- KẾT QUẢ GRAPH RAG ---\n\n${result.answer_graph}` 
+                : result.answer;
+            
+            console.log('[ChatArea] Final message content length:', content.length);
             const aiMessage = {
                 id: `msg-${Date.now()}`,
                 role: 'assistant' as const,
-                content: result.answer,
+                content,
                 citations: result.citations.map((_, index) => index + 1),
                 citationDetails: result.citations,
                 timestamp: new Date().toISOString(),

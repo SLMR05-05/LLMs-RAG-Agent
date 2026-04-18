@@ -24,7 +24,21 @@ export interface Source {
 
 export interface ChatMessage {
     id: string;
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'assistantGraphRag';
+    content: string;
+    citations?: number[];
+    citationDetails?: Array<{
+        source_name: string;
+        page?: number | null;
+        snippet: string;
+    }>;
+    timestamp: string;
+    html?: string;
+}
+
+export interface ChatMessageAi {
+    id: string;
+    role: 'user' | 'assistant' | 'assistantGraphRag';
     content: string;
     citations?: number[];
     citationDetails?: Array<{

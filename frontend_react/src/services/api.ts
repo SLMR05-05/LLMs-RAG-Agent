@@ -36,6 +36,7 @@ export type ChatApiResponse = {
     session_id: string;
     rewritten_question: string;
     answer: string;
+    answer_graph: string;
     citations: Array<{
         source_name: string;
         page?: number | null;
@@ -48,7 +49,7 @@ export type ChatMessagesApiResponse = {
     session_id?: string | null;
     messages: Array<{
         message_id: string;
-        role: 'user' | 'assistant' | 'system';
+        role: 'user' | 'assistant' | 'assistantGraphRag' | 'system';
         content: string;
         created_at?: string | null;
     }>;
@@ -197,8 +198,8 @@ export const apiService = {
         const uiMessages = data.messages
             .filter(
                 (item): item is ChatMessagesApiResponse['messages'][number] & {
-                    role: 'user' | 'assistant';
-                } => item.role === 'user' || item.role === 'assistant'
+                    role: 'user' | 'assistant' | 'assistantGraphRag';
+                } => item.role === 'user' || item.role === 'assistant' || item.role === 'assistantGraphRag'
             )
             .map((item) => ({
                 id: item.message_id,
