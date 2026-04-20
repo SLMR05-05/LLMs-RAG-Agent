@@ -63,7 +63,9 @@ export const NotebookCard: FC<NotebookCardProps> = ({ notebook, onRename, onDele
                         leaveFrom="opacity-100 translate-y-0 scale-100"
                         leaveTo="opacity-0 translate-y-1 scale-95"
                     >
-                        <MenuItems className="absolute right-0 top-11 z-30 w-52 origin-top-right overflow-hidden rounded-2xl border border-gray-200 bg-white p-1 shadow-[0_18px_50px_rgba(15,23,42,0.14)] ring-1 ring-black/5 focus:outline-none">
+                        <MenuItems 
+                        anchor="bottom end"
+                        className="absolute right-0 top-11 z-30 w-52 origin-top-right overflow-hidden rounded-2xl border border-gray-200 bg-white p-1 shadow-[0_18px_50px_rgba(15,23,42,0.14)] ring-1 ring-black/5 focus:outline-none">
                             <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">
                                 Notebook actions
                             </div>
