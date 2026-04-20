@@ -50,7 +50,10 @@ ollama pull qwen2.5:1.5b
 ## Chay ung dung
 
 ```bash
-streamlit run app.py
+# backend:
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+# frontend:
+npm run dev
 ```
 
 Mo trinh duyet tai `http://localhost:8501`.
