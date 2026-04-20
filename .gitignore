@@ -21,3 +21,7 @@ env/
 
 # Local runtime artifacts
 .streamlit/secrets.toml
+
+# Storage data (notebooks, vector databases, documents)
+backend/storage/
+storage/
