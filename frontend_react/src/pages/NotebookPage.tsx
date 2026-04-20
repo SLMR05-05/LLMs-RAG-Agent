@@ -8,10 +8,14 @@ import { apiService } from '../services/api';
 
 export const NotebookPage: FC = () => {
     const { id } = useParams<{ id: string }>();
+    const getNotebookById = useAppStore((s) => s.getNotebookById);
+    const upsertNotebook = useAppStore((s) => s.upsertNotebook);
     const setActiveNotebook = useAppStore((s) => s.setActiveNotebook);
     const setSources = useAppStore((s) => s.setSources);
     const setChatMessages = useAppStore((s) => s.setChatMessages);
     const setChatSessionForNotebook = useAppStore((s) => s.setChatSessionForNotebook);
+    const closeSourceDetail = useAppStore((s) => s.closeSourceDetail);
+    const resetChatHistory = useAppStore((s) => s.resetChatHistory);
     const setError = useAppStore((s) => s.setError);
 
     useEffect(() => {
@@ -22,7 +26,18 @@ export const NotebookPage: FC = () => {
         const loadNotebookData = async () => {
             try {
                 setError(null);
+                closeSourceDetail();
+                resetChatHistory();
                 setActiveNotebook(id);
+
+                const existingNotebook = getNotebookById(id);
+                if (!existingNotebook) {
+                    const notebook = await apiService.getNotebook(id);
+                    if (mounted) {
+                        upsertNotebook(notebook);
+                    }
+                }
+
                 const [sources, chat] = await Promise.all([
                     apiService.getNotebookSources(id),
                     apiService.getNotebookChatMessages(id),
@@ -47,7 +62,18 @@ export const NotebookPage: FC = () => {
         return () => {
             mounted = false;
         };
-    }, [id, setActiveNotebook, setChatMessages, setChatSessionForNotebook, setError, setSources]);
+    }, [
+        closeSourceDetail,
+        getNotebookById,
+        id,
+        resetChatHistory,
+        setActiveNotebook,
+        setChatMessages,
+        setChatSessionForNotebook,
+        setError,
+        setSources,
+        upsertNotebook,
+    ]);
 
     if (!id) {
         return null;
