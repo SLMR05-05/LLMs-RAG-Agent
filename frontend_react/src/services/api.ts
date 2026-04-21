@@ -1,4 +1,4 @@
-import type { ChatMessage, Notebook, Source } from '../store/useAppStore';
+import type { ChatMessage, ChatSettings, Notebook, SourceDocument } from '../store/useAppStore';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -13,7 +13,29 @@ export type ApiSource = {
     document_id: string;
     source_name: string;
     source_type: string;
+    page_count?: number | null;
+    file_size_bytes?: number | null;
     created_at?: string | null;
+};
+
+export type ApiSourceChunk = {
+    chunk_id: string;
+    chunk_index: number;
+    page_number?: number | null;
+    text_content: string;
+    created_at?: string | null;
+};
+
+export type ApiSourceDetailResponse = {
+    notebook_id: string;
+    document_id: string;
+    source_name: string;
+    source_type: string;
+    created_at?: string | null;
+    page_count?: number | null;
+    file_size_bytes?: number | null;
+    chunks: ApiSourceChunk[];
+    parsed_markdown: string;
 };
 
 export type ApiSourcesResponse = {
@@ -29,6 +51,7 @@ export type ChatPayload = {
     top_k?: number;
     source_names?: string[];
     answer_language?: 'vi' | 'en';
+    chatSettings?: ChatSettings;
 };
 
 export type ChatApiResponse = {
@@ -75,7 +98,26 @@ export type UploadApiResponse = {
     status?: string | null;
 };
 
-function parseSourceType(sourceType: string): Source['type'] {
+export type WebSourceApiResponse = {
+    notebook_id: string;
+    job_id: string;
+    status: string;
+};
+
+export type SourceManageApiResponse = {
+    notebook_id: string;
+    document_id: string;
+    source_name: string;
+    source_type: string;
+    status: string;
+};
+
+export type ChatClearApiResponse = {
+    notebook_id: string;
+    status: string;
+};
+
+function parseSourceType(sourceType: string): SourceDocument['type'] {
     const normalized = sourceType.toLowerCase();
     if (normalized.includes('web')) return 'web';
     if (normalized.includes('research')) return 'research';
@@ -114,6 +156,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const apiService = {
+    async getNotebook(notebookId: string): Promise<Notebook> {
+        const data = await request<ApiNotebook>(`/notebooks/${notebookId}`);
+        return {
+            id: data.notebook_id,
+            notebook_id: data.notebook_id,
+            name: data.notebook_name,
+            created_at: data.created_at || new Date().toISOString(),
+            last_modified: data.updated_at || data.created_at || new Date().toISOString(),
+        };
+    },
+
     async createNotebook(name: string): Promise<Notebook> {
         const data = await request<ApiNotebook>('/notebooks', {
             method: 'POST',
@@ -166,15 +219,47 @@ export const apiService = {
         }));
     },
 
-    async getNotebookSources(notebookId: string): Promise<Source[]> {
+    async getNotebookSources(notebookId: string): Promise<SourceDocument[]> {
         const data = await request<ApiSourcesResponse>(`/notebooks/${notebookId}/sources`);
         return data.sources.map((source) => ({
             id: source.document_id,
             title: source.source_name,
             type: parseSourceType(source.source_type),
-            description: source.source_type,
+            description: `.${source.source_type}`,
+            created_at: source.created_at || undefined,
+            page_count: source.page_count ?? null,
+            file_size_bytes: source.file_size_bytes ?? null,
             selected: true,
         }));
+    },
+
+    async getSourceDetail(notebookId: string, documentId: string): Promise<SourceDocument> {
+        const data = await request<ApiSourceDetailResponse>(
+            `/notebooks/${notebookId}/sources/${documentId}`
+        );
+
+        return {
+            id: data.document_id,
+            title: data.source_name,
+            type: parseSourceType(data.source_type),
+            description: `.${data.source_type}`,
+            selected: true,
+            created_at: data.created_at || undefined,
+            page_count: data.page_count ?? null,
+            file_size_bytes: data.file_size_bytes ?? null,
+            chunks: data.chunks.map((chunk) => ({
+                chunk_id: chunk.chunk_id,
+                chunk_index: chunk.chunk_index,
+                page_number: chunk.page_number ?? null,
+                text_content: chunk.text_content,
+                created_at: chunk.created_at || undefined,
+            })),
+            parsed_markdown: data.parsed_markdown,
+        };
+    },
+
+    getSourcePreviewUrl(notebookId: string, documentId: string): string {
+        return `${API_BASE_URL}/notebooks/${notebookId}/sources/${documentId}/preview`;
     },
 
     async chatNotebook(notebookId: string, payload: ChatPayload): Promise<ChatApiResponse> {
@@ -187,7 +272,14 @@ export const apiService = {
                 top_k: payload.top_k || 4,
                 source_names: payload.source_names,
                 answer_language: payload.answer_language,
+                chatSettings: payload.chatSettings,
             }),
+        });
+    },
+
+    async clearNotebookChatHistory(notebookId: string): Promise<ChatClearApiResponse> {
+        return request<ChatClearApiResponse>(`/notebooks/${notebookId}/chat`, {
+            method: 'DELETE',
         });
     },
 
@@ -229,6 +321,26 @@ export const apiService = {
         }
 
         return response.json() as Promise<UploadApiResponse>;
+    },
+
+    async addNotebookWebLink(notebookId: string, url: string): Promise<WebSourceApiResponse> {
+        return request<WebSourceApiResponse>(`/notebooks/${notebookId}/sources/url`, {
+            method: 'POST',
+            body: JSON.stringify({ url }),
+        });
+    },
+
+    async renameSource(sourceId: string, sourceName: string): Promise<SourceManageApiResponse> {
+        return request<SourceManageApiResponse>(`/sources/${sourceId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ source_name: sourceName }),
+        });
+    },
+
+    async deleteSource(sourceId: string): Promise<SourceManageApiResponse> {
+        return request<SourceManageApiResponse>(`/sources/${sourceId}`, {
+            method: 'DELETE',
+        });
     },
 
     async getJob(jobId: string): Promise<JobApiResponse> {

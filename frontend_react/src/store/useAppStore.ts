@@ -22,6 +22,28 @@ export interface Source {
     selected: boolean;
 }
 
+export interface SourceChunk {
+    chunk_id: string;
+    chunk_index: number;
+    page_number?: number | null;
+    text_content: string;
+    created_at?: string;
+}
+
+export interface SourceDocument extends Source {
+    created_at?: string;
+    page_count?: number | null;
+    file_size_bytes?: number | null;
+    chunks?: SourceChunk[];
+    parsed_markdown?: string;
+}
+
+export interface ChatSettings {
+    responseLength: 'short' | 'medium' | 'long';
+    roleplay: string;
+    mode: 'normal' | 'study_guide' | 'critical_thinking';
+}
+
 export interface ChatMessage {
     id: string;
     role: 'user' | 'assistant' | 'assistantGraphRag';
@@ -48,6 +70,12 @@ export interface ChatMessageAi {
     }>;
     timestamp: string;
     html?: string;
+}
+
+export interface ActiveCitation {
+    sourceId?: string;
+    sourceName: string;
+    snippet: string;
 }
 
 export interface Job {
@@ -104,23 +132,40 @@ interface AppStore {
     activeNotebookId: string | null;
     setNotebooks: (notebooks: Notebook[]) => void;
     addNotebook: (notebook: Notebook) => void;
+    upsertNotebook: (notebook: Notebook) => void;
+    getNotebookById: (id: string) => Notebook | null;
     renameNotebook: (id: string, name: string) => void;
     deleteNotebook: (id: string) => void;
     setActiveNotebook: (id: string | null) => void;
     isFetchingNotebooks: boolean;
     fetchNotebooks: () => Promise<void>;
 
-    sources: Source[];
-    setSources: (sources: Source[]) => void;
+    sources: SourceDocument[];
+    setSources: (sources: SourceDocument[]) => void;
     toggleSourceSelection: (sourceId: string) => void;
     selectAllSources: (selected: boolean) => void;
+    hasActiveSources: () => boolean;
+    sidebarViewMode: 'list' | 'detail';
+    selectedSourceForView: SourceDocument | null;
+    openSourceDetail: (source: SourceDocument) => void;
+    closeSourceDetail: () => void;
+    setSelectedSourceDetail: (source: SourceDocument) => void;
+    renameSourceLocal: (sourceId: string, sourceName: string) => void;
+    deleteSourceLocal: (sourceId: string) => void;
 
     chatMessages: ChatMessage[];
     chatSessionByNotebook: Record<string, string>;
+    chatSettings: ChatSettings;
+    activeCitation: ActiveCitation | null;
     addChatMessage: (message: ChatMessage) => void;
     setChatMessages: (messages: ChatMessage[]) => void;
     setChatSessionForNotebook: (notebookId: string, sessionId: string | null) => void;
     clearChat: () => void;
+    resetChatHistory: () => void;
+    setChatSettings: (settings: ChatSettings) => void;
+    setActiveCitation: (citation: ActiveCitation | null) => void;
+    clearActiveCitation: () => void;
+    clearChatHistory: (notebookId: string) => Promise<void>;
     isTyping: boolean;
     setIsTyping: (typing: boolean) => void;
 
@@ -130,6 +175,7 @@ interface AppStore {
 
     uploadQueue: UploadJob[];
     addUploadJobs: (files: File[]) => void;
+    addWebLink: (notebookId: string, url: string) => Promise<string>;
     updateJobProgress: (uploadId: string, progress: number) => void;
     updateJobStatus: (
         uploadId: string,
@@ -151,7 +197,7 @@ interface AppStore {
 // ZUSTAND STORE
 // ═══════════════════════════════════════════════════════════
 
-export const useAppStore = create<AppStore>((set) => ({
+export const useAppStore = create<AppStore>((set, get) => ({
     leftPanelCollapsed: false,
     rightPanelCollapsed: false,
     toggleLeftPanel: () =>
@@ -166,6 +212,24 @@ export const useAppStore = create<AppStore>((set) => ({
         set((state: AppStore) => ({
             notebooks: [notebook, ...state.notebooks],
         })),
+    upsertNotebook: (notebook: Notebook) =>
+        set((state: AppStore) => {
+            const existingIndex = state.notebooks.findIndex(
+                (item) => item.id === notebook.id || item.notebook_id === notebook.id
+            );
+
+            if (existingIndex < 0) {
+                return { notebooks: [notebook, ...state.notebooks] };
+            }
+
+            const nextNotebooks = [...state.notebooks];
+            nextNotebooks[existingIndex] = notebook;
+            return { notebooks: nextNotebooks };
+        }),
+    getNotebookById: (id: string) => {
+        const notebook = get().notebooks.find((item) => item.id === id || item.notebook_id === id);
+        return notebook || null;
+    },
     renameNotebook: (id: string, name: string) =>
         set((state: AppStore) => ({
             notebooks: state.notebooks.map((notebook) =>
@@ -193,20 +257,53 @@ export const useAppStore = create<AppStore>((set) => ({
     },
 
     sources: [],
-    setSources: (sources: Source[]) => set({ sources }),
+    setSources: (sources: SourceDocument[]) => set({ sources }),
     toggleSourceSelection: (sourceId: string) =>
         set((state: AppStore) => ({
-            sources: state.sources.map((s: Source) =>
+            sources: state.sources.map((s: SourceDocument) =>
                 s.id === sourceId ? { ...s, selected: !s.selected } : s
             ),
         })),
     selectAllSources: (selected: boolean) =>
         set((state: AppStore) => ({
-            sources: state.sources.map((s: Source) => ({ ...s, selected })),
+            sources: state.sources.map((s: SourceDocument) => ({ ...s, selected })),
+        })),
+    hasActiveSources: () => get().sources.some((source) => source.selected),
+    sidebarViewMode: 'list',
+    selectedSourceForView: null,
+    openSourceDetail: (source: SourceDocument) =>
+        set({ sidebarViewMode: 'detail', selectedSourceForView: source }),
+    closeSourceDetail: () =>
+        set({ sidebarViewMode: 'list', selectedSourceForView: null, activeCitation: null }),
+    setSelectedSourceDetail: (source: SourceDocument) =>
+        set({ selectedSourceForView: source, sidebarViewMode: 'detail' }),
+    renameSourceLocal: (sourceId: string, sourceName: string) =>
+        set((state: AppStore) => ({
+            sources: state.sources.map((source) =>
+                source.id === sourceId ? { ...source, title: sourceName } : source
+            ),
+            selectedSourceForView:
+                state.selectedSourceForView?.id === sourceId
+                    ? { ...state.selectedSourceForView, title: sourceName }
+                    : state.selectedSourceForView,
+        })),
+    deleteSourceLocal: (sourceId: string) =>
+        set((state: AppStore) => ({
+            sources: state.sources.filter((source) => source.id !== sourceId),
+            selectedSourceForView:
+                state.selectedSourceForView?.id === sourceId ? null : state.selectedSourceForView,
+            sidebarViewMode:
+                state.selectedSourceForView?.id === sourceId ? 'list' : state.sidebarViewMode,
         })),
 
     chatMessages: [],
     chatSessionByNotebook: {},
+    chatSettings: {
+        responseLength: 'medium',
+        roleplay: '',
+        mode: 'normal',
+    },
+    activeCitation: null,
     addChatMessage: (message: ChatMessage) =>
         set((state: AppStore) => ({
             chatMessages: [...state.chatMessages, message],
@@ -227,6 +324,22 @@ export const useAppStore = create<AppStore>((set) => ({
             };
         }),
     clearChat: () => set({ chatMessages: [] }),
+    resetChatHistory: () => set({ chatMessages: [] }),
+    setChatSettings: (settings: ChatSettings) => set({ chatSettings: settings }),
+    setActiveCitation: (citation: ActiveCitation | null) => set({ activeCitation: citation }),
+    clearActiveCitation: () => set({ activeCitation: null }),
+    clearChatHistory: async (notebookId: string) => {
+        await apiService.clearNotebookChatHistory(notebookId);
+        set((state: AppStore) => {
+            const restSessions = { ...state.chatSessionByNotebook };
+            delete restSessions[notebookId];
+            return {
+                chatMessages: [],
+                chatSessionByNotebook: restSessions,
+                activeCitation: null,
+            };
+        });
+    },
     isTyping: false,
     setIsTyping: (typing: boolean) => set({ isTyping: typing }),
 
@@ -257,6 +370,10 @@ export const useAppStore = create<AppStore>((set) => ({
                 })),
             ],
         })),
+    addWebLink: async (notebookId: string, url: string) => {
+        const result = await apiService.addNotebookWebLink(notebookId, url);
+        return result.job_id;
+    },
     updateJobProgress: (uploadId: string, progress: number) =>
         set((state: AppStore) => ({
             uploadQueue: state.uploadQueue.map((job) =>
