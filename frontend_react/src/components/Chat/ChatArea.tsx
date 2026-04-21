@@ -4,10 +4,12 @@ import type { ChangeEvent, KeyboardEvent } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAppStore } from '../../store/useAppStore';
-import { Send } from 'lucide-react';
+import { Send, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { apiService } from '../../services/api';
 import { detectQuestionLanguage } from '../../utils/language';
 import CitationBadge from './CitationBadge';
+import ChatSettingsModal from './ChatSettingsModal';
+import ConfirmModal from '../Common/ConfirmModal';
 
 type CitationDetail = {
     source_name: string;
@@ -59,6 +61,11 @@ const markdownComponents: Components = {
     ),
 };
 
+const inlineCitationMarkdownComponents: Components = {
+    ...markdownComponents,
+    p: ({ children }) => <span className="inline leading-7 text-gray-800">{children}</span>,
+};
+
 function splitContentByCitations(content: string): MessageSegment[] {
     const citationPattern = /\[(\d+)\]/g;
     const segments: MessageSegment[] = [];
@@ -105,13 +112,14 @@ function renderAssistantContent(content: string, citations: CitationDetail[] = [
         }
 
         return (
-            <ReactMarkdown
-                key={`markdown-${index}`}
-                remarkPlugins={[remarkGfm]}
-                components={markdownComponents}
-            >
-                {segment.content}
-            </ReactMarkdown>
+            <span key={`markdown-${index}`} className="inline align-baseline">
+                <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={inlineCitationMarkdownComponents}
+                >
+                    {segment.content}
+                </ReactMarkdown>
+            </span>
         );
     });
 }
@@ -124,20 +132,27 @@ export const ChatArea: FC = () => {
         setIsTyping,
         activeNotebookId,
         sources,
+        hasActiveSources,
         chatSessionByNotebook,
         setChatSessionForNotebook,
+        chatSettings,
+        clearChatHistory,
         setError,
     } = useAppStore();
 
     const [inputValue, setInputValue] = useState('');
     const [textareaHeight, setTextareaHeight] = useState('44px');
+    const [showClearConfirm, setShowClearConfirm] = useState(false);
+    const [isClearingChat, setIsClearingChat] = useState(false);
+    const [showChatSettings, setShowChatSettings] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const hasSources = sources.length > 0;
+    const hasSelectedSources = hasActiveSources();
     const selectedSourceNames = sources
         .filter((source) => source.selected)
         .map((source) => source.title);
-    const canChat = Boolean(activeNotebookId) && hasSources;
+    const canChat = Boolean(activeNotebookId) && hasSelectedSources;
     const activeSessionId = activeNotebookId ? chatSessionByNotebook[activeNotebookId] : undefined;
 
     // Auto-scroll to bottom on new messages
@@ -185,6 +200,7 @@ export const ChatArea: FC = () => {
                 session_id: activeSessionId,
                 source_names: selectedSourceNames.length > 0 ? selectedSourceNames : undefined,
                 answer_language: detectQuestionLanguage(question),
+                chatSettings,
             });
 
             console.log('[ChatArea] API response received:', {
@@ -245,19 +261,65 @@ export const ChatArea: FC = () => {
         textareaRef.current?.focus();
     }, []);
 
+    const handleConfirmClearChat = async () => {
+        if (!activeNotebookId || isClearingChat) return;
+
+        try {
+            setIsClearingChat(true);
+            setError(null);
+            await clearChatHistory(activeNotebookId);
+            setShowClearConfirm(false);
+        } catch (error) {
+            const message =
+                error instanceof Error && error.message.trim().length > 0
+                    ? error.message
+                    : 'Không thể xóa lịch sử trò chuyện.';
+            setError(message);
+        } finally {
+            setIsClearingChat(false);
+        }
+    };
+
     return (
         <div className="flex flex-col h-full min-h-0 bg-white border-r border-gray-200">
+            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+                <div className="text-sm font-semibold text-gray-900">Hội thoại</div>
+                <div className="panel-header-actions flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setShowClearConfirm(true)}
+                        disabled={!activeNotebookId || isTyping || chatMessages.length === 0}
+                        className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                        Xóa cuộc trò chuyện
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setShowChatSettings(true)}
+                        disabled={!activeNotebookId}
+                        className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <SlidersHorizontal className="h-3.5 w-3.5 text-gray-600" />
+                        Cài đặt Chat
+                    </button>
+                </div>
+            </div>
+
             {/* CHAT MESSAGES CONTAINER */}
             <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-4">
                 {chatMessages.length === 0 ? (
                     <div className="flex items-center justify-center h-full">
                         <div className="text-center">
                             <h2 className="text-xl font-semibold text-gray-900 mb-2">
-                                {hasSources ? 'Bắt đầu hội thoại' : 'Chưa có nguồn dữ liệu'}
+                                {hasSources ? (hasSelectedSources ? 'Bắt đầu hội thoại' : 'Chưa chọn nguồn tài liệu') : 'Chưa có nguồn dữ liệu'}
                             </h2>
                             <p className="text-sm text-gray-600">
                                 {hasSources
-                                    ? 'Hỏi câu hỏi về các tài liệu của bạn'
+                                    ? (hasSelectedSources
+                                        ? 'Hỏi câu hỏi về các tài liệu của bạn'
+                                        : 'Vui lòng chọn ít nhất 1 nguồn tài liệu để bắt đầu trò chuyện...')
                                     : 'Vui lòng thêm ít nhất một file nguồn ở cột bên trái để bắt đầu chat.'}
                             </p>
                         </div>
@@ -313,6 +375,11 @@ export const ChatArea: FC = () => {
                         Bạn cần thêm nguồn tài liệu trước khi đặt câu hỏi.
                     </p>
                 )}
+                {hasSources && !hasSelectedSources && (
+                    <p className="mb-3 text-xs font-medium text-amber-700">
+                        Vui lòng chọn ít nhất 1 nguồn tài liệu để bắt đầu trò chuyện...
+                    </p>
+                )}
                 <div className="flex items-end gap-3">
                     <textarea
                         ref={textareaRef}
@@ -320,9 +387,15 @@ export const ChatArea: FC = () => {
                         onChange={handleTextareaChange}
                         onKeyDown={handleKeyDown}
                         disabled={!canChat || isTyping}
-                        placeholder={hasSources ? 'Nhập câu hỏi...' : 'Thêm nguồn tài liệu để bắt đầu chat'}
+                        placeholder={
+                            hasSources
+                                ? (hasSelectedSources
+                                    ? 'Nhập câu hỏi...'
+                                    : 'Vui lòng chọn ít nhất 1 nguồn tài liệu để bắt đầu trò chuyện...')
+                                : 'Thêm nguồn tài liệu để bắt đầu chat'
+                        }
                         style={{ height: textareaHeight }}
-                        className="flex-1 px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg resize-none text-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 max-h-40 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                        className="flex-1 px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg resize-none text-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 max-h-40 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
                     />
                     <button
                         onClick={handleSendMessage}
@@ -334,6 +407,22 @@ export const ChatArea: FC = () => {
                     </button>
                 </div>
             </div>
+
+            <ConfirmModal
+                open={showClearConfirm}
+                title="Xóa cuộc trò chuyện"
+                description="Bạn có chắc chắn muốn xóa toàn bộ lịch sử trò chuyện của sổ ghi chú này không?"
+                confirmText="Xóa"
+                isSubmitting={isClearingChat}
+                onConfirm={handleConfirmClearChat}
+                onClose={() => {
+                    if (!isClearingChat) {
+                        setShowClearConfirm(false);
+                    }
+                }}
+            />
+
+            <ChatSettingsModal open={showChatSettings} onClose={() => setShowChatSettings(false)} />
         </div>
     );
 };
