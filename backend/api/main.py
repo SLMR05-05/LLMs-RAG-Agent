@@ -712,7 +712,9 @@ def chat_notebook(
     payload: ChatRequest,
     notebook_id: str = Path(min_length=6),
 ) -> ChatResponse:
+    print(f"[API CHAT] Received request - notebook_id={notebook_id}, question={payload.question[:50]}...")
     try:
+        print(f"[API CHAT] Calling rag_service.chat()...")
         result = rag_service.chat(
             notebook_id=notebook_id,
             question=payload.question,
@@ -723,15 +725,23 @@ def chat_notebook(
             answer_language=payload.answer_language,
             chat_settings=payload.chat_settings.model_dump() if payload.chat_settings else None,
         )
-        return ChatResponse(**result)
+        print(f"[API CHAT] rag_service.chat() returned successfully")
+        print(f"[API CHAT] Creating ChatResponse from result...")
+        response = ChatResponse(**result)
+        print(f"[API CHAT] ChatResponse created successfully")
+        return response
     except ValueError as exc:
+        print(f"[API CHAT ERROR] ValueError: {str(exc)}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        print(f"[API CHAT ERROR] Unexpected error: {type(exc).__name__}: {str(exc)}")
+        import traceback
+        print(f"[API CHAT ERROR] Traceback:\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
             detail={
                 "code": "CHAT_PIPELINE_ERROR",
-                "message": "Internal server error while processing chat request.",
+                "message": f"Internal server error: {str(exc)}",
             },
         ) from exc
 
