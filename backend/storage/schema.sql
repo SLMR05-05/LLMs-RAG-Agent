@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     message_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     notebook_id TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
+    role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'assistantGraphRag')),
     content TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES chat_sessions (session_id) ON DELETE CASCADE,

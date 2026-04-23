@@ -21,6 +21,8 @@ from langchain_core.prompts import PromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from PIL import Image
 
+import logging
+
 from services.notebook_storage import NotebookStorage
 from services.graph_rag_service import GraphRAGService
 
@@ -307,7 +309,6 @@ class RAGService:
                 file_path = index_dir / filename
                 if file_path.exists() and file_path.is_file():
                     file_path.unlink(missing_ok=True)
-
         return {
             "notebook_id": notebook_id,
             "document_id": str(source["document_id"]),
@@ -416,15 +417,17 @@ class RAGService:
                     page_number=page_number,
                 )
 
+
             current_vector_size += len(chunk_ids)
             total_chunks += len(chunk_ids)
 
         # Build graph once after collecting all chunks (single call)
+        
         print(f"[RAG_INDEX] Collected {len(graph_chunks)} total chunks for graph building")
         if graph_chunks:
             try:
                 print(f"[RAG_INDEX] Calling build_graph_from_chunks with {len(graph_chunks)} chunks...")
-                self.GRS.build_graph_from_chunks(graph_chunks)
+                self.GRS.build_graph_from_chunks(graph_chunks,notebook_id)
                 print(f"[RAG_INDEX] ✅ Graph building completed successfully")
             except Exception as e:
                 print(f"[RAG_INDEX ERROR] GraphRAG indexing failed: {type(e).__name__}: {str(e)}")
@@ -432,7 +435,41 @@ class RAGService:
                 print(f"[RAG_INDEX ERROR] Traceback:\n{traceback.format_exc()}")
         else:
             print(f"[RAG_INDEX WARNING] No graph chunks collected - GraphRAG will be empty!")
+        
+        #lưu graph rag
+        
+        dirs = self.storage.get_notebook_dirs(notebook_id)
+        try:
+            graph_rag_path = dirs["graph"]
+            full_dest_path = os.path.join(graph_rag_path, "graph_backup.rdb")
+            print(f"[GraphRAG] 💾 Đang bắt đầu quá trình lưu snapshot tại: {full_dest_path}")
+
             
+            # 2. Export dữ liệu từ FalkorDB ra file vật lý
+            # Lưu ý: Hàm này cần đảm bảo file được ghi thành công trước khi đi tiếp
+            self.GRS.export_falkor_snapshot(graph_rag_path)
+            
+            # 3. Kiểm tra file có thực sự tồn tại sau khi export không
+            if os.path.exists(full_dest_path):
+                # 4. Lưu thông tin metadata vào Database (theo schema graph_snapshots)
+                snapshot_id = self.storage.add_graph_snapshot(notebook_id, full_dest_path)
+                
+                if snapshot_id:
+                    print(f"[GraphRAG] ✅ Đã export và lưu snapshot thành công vào DB (ID: {snapshot_id})")
+                else:
+                    # Trường hợp file có nhưng DB không ghi được (ví dụ trùng PK hoặc lỗi SQL)
+                    print("[GraphRAG WARNING] File đã lưu nhưng không thể ghi metadata vào database.")
+            else:
+                raise FileNotFoundError(f"Export hoàn tất nhưng không tìm thấy file tại {full_dest_path}")
+
+        except FileNotFoundError as fnf_error:
+            print(f"[GraphRAG ERROR] Lỗi file hệ thống: {fnf_error}")
+            # Có thể thêm logic tạo folder nếu chưa có ở đây
+        except Exception as e:
+            # Catch-all cho các lỗi kết nối FalkorDB hoặc lỗi ghi DB
+            print(f"[GraphRAG ERROR] Quá trình lưu snapshot thất bại: {type(e).__name__} - {str(e)}")
+            # Log chi tiết để kiểm tra sau này
+            logging.error(f"Failed to save graph snapshot for notebook {notebook_id}", exc_info=True)
 
         dirs = self.storage.get_notebook_dirs(notebook_id)
         dirs["vector_db"].mkdir(parents=True, exist_ok=True)
@@ -659,8 +696,8 @@ class RAGService:
             print(f"[CHAT] User message saved")
             self.storage.add_chat_message(notebook_id=notebook_id, session_id=session_id, role="assistant", content=answer)
             print(f"[CHAT] Assistant message saved")
-            # Note: answer_graph is returned in API response but NOT saved as separate message
-            # Database schema only supports roles: 'system', 'user', 'assistant'
+            self.storage.add_chat_message(notebook_id=notebook_id, session_id=session_id, role="assistantGraphRag", content=answer_graph)
+            print(f"[CHAT] assistantGraphRag message saved")
             print(f"[CHAT] Chat messages saved successfully")
         except Exception as e:
             print(f"[CHAT ERROR] Failed to save chat messages: {str(e)}")
