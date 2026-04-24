@@ -21,3 +21,6 @@ env/
 
 # Local runtime artifacts
 .streamlit/secrets.toml
+
+#storage_data_notebook
+storage/notebooks

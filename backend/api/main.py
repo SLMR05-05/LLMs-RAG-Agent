@@ -5,6 +5,7 @@ import importlib
 import tempfile
 from pathlib import Path as FilePath
 from urllib.parse import urljoin, urlparse
+from html import unescape as html_unescape
 import requests
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Path, UploadFile
 from fastapi.responses import FileResponse
@@ -80,6 +81,54 @@ def _load_optional_scrapers() -> tuple[object | None, object | None]:
     return trafilatura_mod, bs4_mod
 
 
+def _clean_extracted_text(text: str) -> str:
+    """
+    Thoroughly clean extracted text from HTML for RAG/LLM pipeline.
+    
+    Fixes:
+    1. HTML entities: Converts &ocirc; → ô, &agrave; → à, etc.
+    2. Material icon ligatures: Removes icon text like arrow_right_alt, close, menu, etc.
+    3. Extra whitespace: Normalizes multiple spaces to single space
+    4. Common HTML artifacts: Removes remaining HTML-like patterns
+    
+    Args:
+        text: Raw extracted text with potential HTML artifacts
+        
+    Returns:
+        Clean text ready for RAG/LLM pipeline
+    """
+    # Step 1: Unescape HTML entities (&ocirc; → ô, &agrave; → à, &nbsp; → space, etc.)
+    text = html_unescape(text)
+    
+    # Step 2: Remove Material Design icon ligatures and other icon text
+    # These typically appear in <i> or <span> tags and shouldn't be in content
+    # Pattern matches words that look like icon names (camelCase or snake_case)
+    # Common examples: arrow_right_alt, close, menu, check, delete, edit, etc.
+    icon_patterns = [
+        r'\barrow_(?:right|left|up|down)(?:_alt)?\b',  # arrow_right_alt, arrow_left, etc.
+        r'\b(?:close|menu|search|filter|delete|edit|add|check|done|more_vert|more_horiz)\b',
+        r'\b(?:star|favorite|bookmark|share|thumb_up|thumb_down)\b',
+        r'\b(?:home|settings|help|info|warning|error|success)\b',
+        r'\b(?:expand_more|expand_less|unfold_more|unfold_less)\b',
+        r'\b(?:chevron_(?:left|right|up|down))\b',
+        r'\bMaterial(?:Icons?)?\b',  # Remove "MaterialIcon" or "MaterialIcons" text
+    ]
+    for pattern in icon_patterns:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+    
+    # Step 3: Remove any remaining single-letter icon indicators or malformed text
+    # Remove orphaned icon-like patterns (single letters or short codes in braces/brackets)
+    text = re.sub(r'\s*[{\[]?\s*[a-z]{1,3}_[a-z]{1,3}[}\]]?\s*', ' ', text, flags=re.IGNORECASE)
+    
+    # Step 4: Clean up excessive whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # Step 5: Remove line continuation artifacts and multiple newlines
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    
+    return text
+
+
 def _validate_upload_payload(filename: str, content_type: str | None, content: bytes) -> str | None:
     suffix = FilePath(filename).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -111,6 +160,8 @@ def _extract_pdf_text_from_bytes(pdf_bytes: bytes) -> str:
             file_hash="web_pdf",
         )
         text = "\n\n".join(doc.page_content for doc in docs if doc.page_content)
+        # Clean extracted PDF text: unescape HTML entities and remove artifacts
+        text = _clean_extracted_text(text)
         return text.strip()
     except Exception as exc:
         raise ValueError(f"Khong the xu ly PDF tu URL: {exc}") from exc
@@ -199,7 +250,8 @@ def _extract_web_content(url: str) -> dict[str, object]:
         raw_body = re.sub(r"<style[^>]*>.*?</style>", " ", raw_body, flags=re.IGNORECASE | re.DOTALL)
         text = re.sub(r"<[^>]+>", " ", raw_body)
 
-    text = re.sub(r"\s+", " ", text).strip()
+    # Clean extracted text: unescape HTML entities and remove icon ligatures
+    text = _clean_extracted_text(text)
 
     if len(text) < 350 and len(image_links) >= 3:
         ocr_texts: list[str] = []
@@ -233,12 +285,17 @@ def _extract_web_content(url: str) -> dict[str, object]:
 
                 ocr_text = rag_service.extract_text_from_image_bytes(image_response.content)
                 if ocr_text:
+                    # Clean OCR text from images
+                    ocr_text = _clean_extracted_text(ocr_text)
                     ocr_texts.append(ocr_text)
             except Exception:
                 continue
 
         if ocr_texts:
             text = f"{text}\n\n[OCR from webpage images]\n" + "\n\n".join(ocr_texts)
+
+    # Final cleanup pass
+    text = _clean_extracted_text(text)
 
     if not text:
         raise ValueError(
@@ -655,7 +712,9 @@ def chat_notebook(
     payload: ChatRequest,
     notebook_id: str = Path(min_length=6),
 ) -> ChatResponse:
+    print(f"[API CHAT] Received request - notebook_id={notebook_id}, question={payload.question[:50]}...")
     try:
+        print(f"[API CHAT] Calling rag_service.chat()...")
         result = rag_service.chat(
             notebook_id=notebook_id,
             question=payload.question,
@@ -666,15 +725,23 @@ def chat_notebook(
             answer_language=payload.answer_language,
             chat_settings=payload.chat_settings.model_dump() if payload.chat_settings else None,
         )
-        return ChatResponse(**result)
+        print(f"[API CHAT] rag_service.chat() returned successfully")
+        print(f"[API CHAT] Creating ChatResponse from result...")
+        response = ChatResponse(**result)
+        print(f"[API CHAT] ChatResponse created successfully")
+        return response
     except ValueError as exc:
+        print(f"[API CHAT ERROR] ValueError: {str(exc)}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        print(f"[API CHAT ERROR] Unexpected error: {type(exc).__name__}: {str(exc)}")
+        import traceback
+        print(f"[API CHAT ERROR] Traceback:\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
             detail={
                 "code": "CHAT_PIPELINE_ERROR",
-                "message": "Internal server error while processing chat request.",
+                "message": f"Internal server error: {str(exc)}",
             },
         ) from exc
 

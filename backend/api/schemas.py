@@ -138,6 +138,7 @@ class ChatResponse(BaseModel):
     session_id: str
     rewritten_question: str
     answer: str
+    answer_graph: str = ""
     citations: List[Citation]
 
 

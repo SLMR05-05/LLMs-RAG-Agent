@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -20,7 +21,10 @@ from langchain_core.prompts import PromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from PIL import Image
 
+import logging
+
 from services.notebook_storage import NotebookStorage
+from services.graph_rag_service import GraphRAGService
 
 
 class LocalOllamaEmbeddings(Embeddings):
@@ -53,6 +57,10 @@ class RAGService:
         self.storage = storage or NotebookStorage()
         self.embedder = LocalOllamaEmbeddings()
         self._ocr_reader: Optional[easyocr.Reader] = None
+        #tạo graph 
+        self.GRS = GraphRAGService(self.storage)
+        self._index_lock = threading.Lock()
+        
 
     def _get_ocr_reader(self) -> easyocr.Reader:
         if self._ocr_reader is None:
@@ -301,7 +309,6 @@ class RAGService:
                 file_path = index_dir / filename
                 if file_path.exists() and file_path.is_file():
                     file_path.unlink(missing_ok=True)
-
         return {
             "notebook_id": notebook_id,
             "document_id": str(source["document_id"]),
@@ -356,6 +363,8 @@ class RAGService:
         total_pages = 0
         current_vector_size = len(vector_store.index_to_docstore_id)
 
+        graph_chunks = []  # Collect chunks for graph building
+
         for src in selected_sources:
             source_docs, page_count = self._parse_file_to_documents(
                 file_path=Path(src["upload_path"]),
@@ -367,6 +376,9 @@ class RAGService:
             chunks = splitter.split_documents(source_docs)
             if not chunks:
                 continue
+
+            # Build graph IMMEDIATELY after creating chunks (before database saves)
+            graph_chunks.extend(chunks)
 
             chunk_ids: List[str] = []
             for idx, chunk in enumerate(chunks):
@@ -405,8 +417,59 @@ class RAGService:
                     page_number=page_number,
                 )
 
+
             current_vector_size += len(chunk_ids)
             total_chunks += len(chunk_ids)
+
+        # Build graph once after collecting all chunks (single call)
+        
+        print(f"[RAG_INDEX] Collected {len(graph_chunks)} total chunks for graph building")
+        if graph_chunks:
+            try:
+                print(f"[RAG_INDEX] Calling build_graph_from_chunks with {len(graph_chunks)} chunks...")
+                self.GRS.build_graph_from_chunks(graph_chunks,notebook_id)
+                print(f"[RAG_INDEX] ✅ Graph building completed successfully")
+            except Exception as e:
+                print(f"[RAG_INDEX ERROR] GraphRAG indexing failed: {type(e).__name__}: {str(e)}")
+                import traceback
+                print(f"[RAG_INDEX ERROR] Traceback:\n{traceback.format_exc()}")
+        else:
+            print(f"[RAG_INDEX WARNING] No graph chunks collected - GraphRAG will be empty!")
+        
+        #lưu graph rag
+        
+        dirs = self.storage.get_notebook_dirs(notebook_id)
+        try:
+            graph_rag_path = dirs["graph"]
+            full_dest_path = os.path.join(graph_rag_path, "graph_backup.rdb")
+            print(f"[GraphRAG] 💾 Đang bắt đầu quá trình lưu snapshot tại: {full_dest_path}")
+
+            
+            # 2. Export dữ liệu từ FalkorDB ra file vật lý
+            # Lưu ý: Hàm này cần đảm bảo file được ghi thành công trước khi đi tiếp
+            self.GRS.export_falkor_snapshot(graph_rag_path)
+            
+            # 3. Kiểm tra file có thực sự tồn tại sau khi export không
+            if os.path.exists(full_dest_path):
+                # 4. Lưu thông tin metadata vào Database (theo schema graph_snapshots)
+                snapshot_id = self.storage.add_graph_snapshot(notebook_id, full_dest_path)
+                
+                if snapshot_id:
+                    print(f"[GraphRAG] ✅ Đã export và lưu snapshot thành công vào DB (ID: {snapshot_id})")
+                else:
+                    # Trường hợp file có nhưng DB không ghi được (ví dụ trùng PK hoặc lỗi SQL)
+                    print("[GraphRAG WARNING] File đã lưu nhưng không thể ghi metadata vào database.")
+            else:
+                raise FileNotFoundError(f"Export hoàn tất nhưng không tìm thấy file tại {full_dest_path}")
+
+        except FileNotFoundError as fnf_error:
+            print(f"[GraphRAG ERROR] Lỗi file hệ thống: {fnf_error}")
+            # Có thể thêm logic tạo folder nếu chưa có ở đây
+        except Exception as e:
+            # Catch-all cho các lỗi kết nối FalkorDB hoặc lỗi ghi DB
+            print(f"[GraphRAG ERROR] Quá trình lưu snapshot thất bại: {type(e).__name__} - {str(e)}")
+            # Log chi tiết để kiểm tra sau này
+            logging.error(f"Failed to save graph snapshot for notebook {notebook_id}", exc_info=True)
 
         dirs = self.storage.get_notebook_dirs(notebook_id)
         dirs["vector_db"].mkdir(parents=True, exist_ok=True)
@@ -496,7 +559,9 @@ class RAGService:
         answer_language: Optional[str] = None,
         chat_settings: Optional[dict[str, str]] = None,
     ) -> dict:
+        print(f"[CHAT] Starting chat - notebook_id={notebook_id}, question={question[:50]}...")
         if not self.storage.notebook_exists(notebook_id):
+            print(f"[CHAT ERROR] Notebook not found: {notebook_id}")
             raise ValueError("Notebook not found")
 
         dirs = self.storage.get_notebook_dirs(notebook_id)
@@ -518,72 +583,132 @@ class RAGService:
                 raise ValueError("Notebook indexing failed. Please try again.")
 
         session_id = self.storage.ensure_chat_session(notebook_id=notebook_id, session_id=session_id)
+        print(f"[CHAT] Session ID: {session_id}")
+        
         rewritten_question = self._rewrite_query(
             notebook_id=notebook_id,
             session_id=session_id,
             question=question,
         )
+        print(f"[CHAT] Rewritten question: {rewritten_question}")
 
-        vector_store = FAISS.load_local(
-            folder_path=str(dirs["vector_db"]),
-            embeddings=self.embedder,
-            allow_dangerous_deserialization=True,
-        )
+        try:
+            print(f"[CHAT] Loading vector store from: {dirs['vector_db']}")
+            vector_store = FAISS.load_local(
+                folder_path=str(dirs["vector_db"]),
+                embeddings=self.embedder,
+                allow_dangerous_deserialization=True,
+            )
+            print(f"[CHAT] Vector store loaded successfully")
+        except Exception as e:
+            print(f"[CHAT ERROR] Failed to load vector store: {str(e)}")
+            raise
 
         metadata_filter = {"notebook_id": notebook_id}
         if source_names:
             metadata_filter["source_name"] = {"$in": source_names}
 
         retrieval_k = max(top_k, 8 if len(question.split()) <= 8 else 5)
+        print(f"[CHAT] Retrieval K: {retrieval_k}, metadata_filter: {metadata_filter}")
 
-        docs = vector_store.similarity_search(
-            query=rewritten_question,
-            k=retrieval_k,
-            filter=metadata_filter,
-        )
+        try:
+            print(f"[CHAT] Starting similarity search...")
+            docs = vector_store.similarity_search(
+                query=rewritten_question,
+                k=retrieval_k,
+                filter=metadata_filter,
+            )
+            print(f"[CHAT] Similarity search returned {len(docs)} documents")
+        except Exception as e:
+            print(f"[CHAT ERROR] Similarity search failed: {str(e)}")
+            raise
 
         if not docs:
+            print(f"[CHAT] No documents found, returning default message")
             answer = "Khong tim thay ngu canh phu hop trong notebook de tra loi cau hoi nay."
             citations = []
+            prompt = ""
         else:
-            context = self._build_chat_context(docs)
-            resolved_language = answer_language if answer_language in {"vi", "en"} else self._detect_answer_language(question)
-            prompt_template = self._build_prompt_template(resolved_language, chat_settings)
-            prompt = prompt_template.format(context=context, question=rewritten_question)
+            try:
+                print(f"[CHAT] Building context from {len(docs)} documents")
+                resolved_language = answer_language or self._detect_answer_language(question)
+                print(f"[CHAT] Resolved language: {resolved_language}")
+                context = self._build_chat_context(docs)
+                print(f"[CHAT] Context built, length: {len(context)}")
+                
+                prompt_template = self._build_prompt_template(resolved_language, chat_settings)
+                prompt = prompt_template.format(context=context, question=rewritten_question)
+                print(f"[CHAT] Prompt formatted, length: {len(prompt)}")
 
-            response = self._ollama_client().generate(
-                model=model_name,
-                prompt=prompt,
-                options={
-                    "temperature": 0.1,
-                    "top_p": 0.85,
-                    "repeat_penalty": 1.05,
-                    "num_predict": 220,
-                },
-            )
-            if hasattr(response, "response"):
-                answer = response.response
-            else:
-                answer = response.get("response", "")
-            answer = answer.strip()
-
-            citations = []
-            for doc in docs:
-                citations.append(
-                    {
-                        "source_name": doc.metadata.get("source_name", "unknown"),
-                        "page": doc.metadata.get("page_number") or doc.metadata.get("page"),
-                        "snippet": doc.page_content[:280].replace("\n", " "),
-                    }
+                print(f"[CHAT] Calling Ollama with model: {model_name}")
+                response = self._ollama_client().generate(
+                    model=model_name,
+                    prompt=prompt,
+                    options={
+                        "temperature": 0.1,
+                        "top_p": 0.85,
+                        "repeat_penalty": 1.05,
+                        "num_predict": 220,
+                    },
                 )
+                print(f"[CHAT] Ollama response received")
+                
+                if hasattr(response, "response"):
+                    answer = response.response
+                else:
+                    answer = response.get("response", "")
+                answer = answer.strip()
+                print(f"[CHAT] Answer extracted, length: {len(answer)}")
 
-        self.storage.add_chat_message(notebook_id=notebook_id, session_id=session_id, role="user", content=question)
-        self.storage.add_chat_message(notebook_id=notebook_id, session_id=session_id, role="assistant", content=answer)
+                print(f"[CHAT] Processing citations from {len(docs)} documents")
+                citations = []
+                for idx, doc in enumerate(docs):
+                    try:
+                        citation = {
+                            "source_name": doc.metadata.get("source_name", "unknown"),
+                            "page": doc.metadata.get("page_number") or doc.metadata.get("page"),
+                            "snippet": doc.page_content[:280].replace("\n", " "),
+                        }
+                        citations.append(citation)
+                    except Exception as e:
+                        print(f"[CHAT ERROR] Failed to process citation {idx}: {str(e)}")
+                        raise
+                print(f"[CHAT] Processed {len(citations)} citations")
+            except Exception as e:
+                print(f"[CHAT ERROR] Error in document processing: {str(e)}")
+                raise
 
+#gọi graph-rag       
+        print(f"[CHAT] Calling GraphRAG...")
+        try:
+            answer_graph = self.GRS.answer_question(notebook_id, rewritten_question)
+            print(f"[CHAT] GraphRAG response received, length: {len(answer_graph) if answer_graph else 0}")
+        except Exception as e:
+            # Silently fail graph RAG, use empty string as fallback
+            import logging
+            print(f"[CHAT ERROR] GraphRAG failed: {str(e)}")
+            logging.warning(f"GraphRAG failed for notebook {notebook_id}: {str(e)}")
+            answer_graph = ""
+
+        try:
+            print(f"[CHAT] Saving chat messages to storage...")
+            self.storage.add_chat_message(notebook_id=notebook_id, session_id=session_id, role="user", content=question)
+            print(f"[CHAT] User message saved")
+            self.storage.add_chat_message(notebook_id=notebook_id, session_id=session_id, role="assistant", content=answer)
+            print(f"[CHAT] Assistant message saved")
+            self.storage.add_chat_message(notebook_id=notebook_id, session_id=session_id, role="assistantGraphRag", content=answer_graph)
+            print(f"[CHAT] assistantGraphRag message saved")
+            print(f"[CHAT] Chat messages saved successfully")
+        except Exception as e:
+            print(f"[CHAT ERROR] Failed to save chat messages: {str(e)}")
+            raise
+
+        print(f"[CHAT] Preparing response...")
         return {
             "notebook_id": notebook_id,
             "session_id": session_id,
             "rewritten_question": rewritten_question,
             "answer": answer,
+            "answer_graph": answer_graph,
             "citations": citations,
         }

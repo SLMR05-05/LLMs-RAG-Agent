@@ -194,6 +194,7 @@ export const ChatArea: FC = () => {
 
         try {
             setError(null);
+            console.log('[ChatArea] Calling API with:', { question, activeSessionId });
             const result = await apiService.chatNotebook(activeNotebookId, {
                 question,
                 session_id: activeSessionId,
@@ -202,18 +203,44 @@ export const ChatArea: FC = () => {
                 chatSettings,
             });
 
+            console.log('[ChatArea] API response received:', {
+                answer_length: result.answer?.length,
+                answer_graph_length: result.answer_graph?.length,
+                answer_graph_value: result.answer_graph,
+                citations_count: result.citations?.length,
+            });
+
             setChatSessionForNotebook(activeNotebookId, result.session_id);
+
+
+            const contentRag = result.answer;
+            
+            const contentGraphRag = result.answer_graph;
+
+            
+            
+            console.log('[ChatArea] Final message content length:', contentRag.length);
 
             const aiMessage = {
                 id: `msg-${Date.now()}`,
                 role: 'assistant' as const,
-                content: result.answer,
+                content: contentRag,
                 citations: result.citations.map((_, index) => index + 1),
                 citationDetails: result.citations,
                 timestamp: new Date().toISOString(),
             };
 
+            const aiGraphRagMessage = {
+                id: `msg-${Date.now()}`,
+                role: 'assistantGraphRag' as const,
+                contentGraphRag: contentGraphRag,
+                citations: result.citations.map((_, index) => index + 1),
+                citationDetails: result.citations,
+                timestamp: new Date().toISOString(),
+            }
+
             addChatMessage(aiMessage);
+            addChatMessage(aiGraphRagMessage);
         } catch (error) {
             const message =
                 error instanceof Error && error.message.trim().length > 0
@@ -312,20 +339,47 @@ export const ChatArea: FC = () => {
                     chatMessages.map((msg) => (
                         <div
                             key={msg.id}
-                            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                            className={`flex mb-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                         >
                             <div
-                                className={`max-w-xs md:max-w-md lg:max-w-lg px-4 py-3 rounded-lg shadow-sm ${msg.role === 'user'
-                                    ? 'bg-blue-500 text-white rounded-br-none'
-                                    : 'bg-gray-100 text-gray-900 rounded-bl-none'
-                                    }`}
+                                className={`max-w-xs md:max-w-md lg:max-w-lg px-4 py-3 rounded-lg shadow-sm ${
+                                    msg.role === 'user'
+                                        ? 'bg-blue-600 text-white rounded-br-none'
+                                        : 'bg-white border border-gray-200 text-gray-900 rounded-bl-none'
+                                }`}
                             >
-                                {msg.role === 'assistant' ? (
-                                    <div className="prose prose-sm max-w-none text-gray-800 prose-headings:font-semibold prose-p:my-0 prose-table:my-3 prose-th:border prose-th:border-gray-200 prose-th:bg-gray-50 prose-th:px-3 prose-th:py-2 prose-td:border prose-td:border-gray-100 prose-td:px-3 prose-td:py-2">
-                                        {renderAssistantContent(msg.content, msg.citationDetails || [])}
-                                    </div>
-                                ) : (
+                                {/* HIỂN THỊ TIN NHẮN CỦA USER */}
+                                {msg.role === 'user' && (
                                     <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                )}
+
+                                {/* HIỂN THỊ PHẢN HỒI CỦA ASSISTANT */}
+                                {msg.role === 'assistant' && (
+                                    <div className="space-y-4">
+                                        {/* Phần nội dung RAG thông thường (nếu có) */}
+                                        {msg.content && (
+                                            <div>
+                                                <div className="text-[10px] uppercase tracking-widest text-blue-500 mb-1 font-bold">--- Standard Rag ---</div>
+                                                <div className="prose prose-sm max-w-none text-gray-800">
+                                                    {renderAssistantContent(msg.content, msg.citationDetails || [])}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                                {/* HIỂN THỊ PHẢN HỒI CỦA ASSISTANT */}
+                                {msg.role === 'assistantGraphRag' && (
+                                    <div className="space-y-4">
+                                        {/* Phần nội dung Graph RAG (chỉ hiện nếu có dữ liệu) */}
+                                        {msg.contentGraphRag && (
+                                            <div className="mt-2 pt-2 border-t border-dashed border-gray-200">
+                                                <div className="text-[10px] uppercase tracking-widest text-blue-500 mb-1 font-bold">--- Graph Rag ---</div>
+                                                <div className="prose prose-sm max-w-none text-gray-800 italic">
+                                                    {renderAssistantContent(msg.contentGraphRag, msg.citationDetails || [])}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
                             </div>
                         </div>

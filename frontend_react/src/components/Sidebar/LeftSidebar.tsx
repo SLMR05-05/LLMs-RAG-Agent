@@ -204,9 +204,21 @@ export const LeftSidebar: FC<LeftSidebarProps> = ({ collapsed }) => {
         handleFiles(event.dataTransfer.files);
     };
 
-    const refreshNotebookSources = async (notebookId: string) => {
+    const refreshNotebookSources = async (notebookId: string, uploadedTitle?: string) => {
+        // Lưu lại selected state của các sources cũ
+        const selectedStateMap = new Map(sources.map(s => [s.id, s.selected]));
+
         const freshSources = await apiService.getNotebookSources(notebookId);
-        setSources(freshSources);
+
+        // Kết hợp selected state từ cũ + set selected cho source vừa upload
+        const mergedSources = freshSources.map(source => ({
+            ...source,
+            selected: uploadedTitle
+                ? source.title === uploadedTitle // Set true cho source vừa upload
+                : (selectedStateMap.get(source.id) ?? false) // Giữ selected state cũ, mặc định false
+        }));
+
+        setSources(mergedSources);
     };
 
     const handleRenameSource = async (sourceId: string) => {
@@ -354,7 +366,9 @@ export const LeftSidebar: FC<LeftSidebarProps> = ({ collapsed }) => {
                     });
 
                     if (acceptedJobs.length > 0) {
-                        await refreshNotebookSources(activeNotebookId);
+                        // Lấy file names từ acceptedJobs, activate chỉ file đầu tiên upload
+                        const uploadedFileName = acceptedJobs[0]?.file.name;
+                        await refreshNotebookSources(activeNotebookId, uploadedFileName);
                     }
                     return;
                 }
@@ -409,7 +423,9 @@ export const LeftSidebar: FC<LeftSidebarProps> = ({ collapsed }) => {
                             window.setTimeout(() => removeUploadJob(item.id), 3000);
                         });
 
-                        await refreshNotebookSources(activeNotebookId);
+                        // Lấy file names từ matchedJobs, activate chỉ file đầu tiên upload
+                        const uploadedFileName = matchedJobs[0]?.file.name;
+                        await refreshNotebookSources(activeNotebookId, uploadedFileName);
                         continue;
                     }
 
@@ -467,7 +483,8 @@ export const LeftSidebar: FC<LeftSidebarProps> = ({ collapsed }) => {
                         );
 
                         updateJobStatus(item.id, 'success', item.jobId);
-                        await refreshNotebookSources(activeNotebookId);
+                        // Truyền URL hoặc title của web link vừa upload
+                        await refreshNotebookSources(activeNotebookId, item.url);
                         window.setTimeout(() => {
                             setWebLinkQueue((prev) => prev.filter((it) => it.id !== item.id));
                             removeUploadJob(item.id);

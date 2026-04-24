@@ -7,6 +7,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+import uuid
+from datetime import datetime
+import os
+from pathlib import Path
+
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 STORAGE_ROOT = BACKEND_ROOT / "storage"
@@ -419,6 +424,65 @@ class NotebookStorage:
         """
         with self._connect() as conn:
             return conn.execute(query, [notebook_id, *ids]).fetchall()
+        
+    def add_graph_snapshot(self, notebook_id: str, graph_path: str):
+
+        # Tạo một ID duy nhất cho snapshot
+        graph_id = f"graph_{uuid.uuid4().hex[:8]}"
+        
+        query = """
+        INSERT INTO graph_snapshots (graph_id, notebook_id, graph_path, graph_format, created_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """
+        
+        params = (
+            graph_id, 
+            notebook_id, 
+            str(graph_path), 
+            'falkordb'  # Ghi đè default 'networkx' vì bạn dùng FalkorDB
+        )
+
+        try:
+            with self._connect() as conn:
+                conn.execute(query, params)
+                conn.commit()
+            return graph_id
+        except Exception as e:
+            print(f"❌ Lỗi khi lưu snapshot vào DB: {e}")
+            self.conn.rollback()
+            return None
+        
+
+
+    def delete_graph_snapshot(self, graph_id: str):
+        """
+        Xóa snapshot khỏi DB và xóa file vật lý tương ứng.
+        """
+        # 1. Tìm đường dẫn file trước khi xóa trong DB
+        select_query = "SELECT graph_path FROM graph_snapshots WHERE graph_id = ?"
+        
+        try:
+            with self._connect() as conn:
+                conn.execute(select_query, (graph_id,))
+                self.conn.commit()
+                row = conn.fetchone()
+
+            if not row:
+                print(f"⚠️ Không tìm thấy snapshot với ID: {graph_id}")
+                return False
+
+            delete_query = "DELETE FROM graph_snapshots WHERE graph_id = ?"
+            with self._connect() as conn:
+                conn.execute(delete_query, (graph_id,))
+                conn.commit()
+            
+            print(f"✅ Đã xóa snapshot {graph_id} khỏi database.")
+            return True
+
+        except Exception as e:
+            print(f"❌ Lỗi khi xóa snapshot: {e}")
+            self.conn.rollback()
+            return False
 
     def create_chat_session(self, notebook_id: str, session_title: Optional[str] = None) -> str:
         session_id = uuid.uuid4().hex
@@ -451,14 +515,17 @@ class NotebookStorage:
 
     def add_chat_message(self, notebook_id: str, session_id: str, role: str, content: str) -> str:
         message_id = uuid.uuid4().hex
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO chat_messages (message_id, session_id, notebook_id, role, content)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (message_id, session_id, notebook_id, role, content),
-            )
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO chat_messages (message_id, session_id, notebook_id, role, content)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (message_id, session_id, notebook_id, role, content),
+                )
+        except Exception as e:
+            print(f"lỗi : {e}")
         return message_id
 
     def get_recent_chat_messages(

@@ -51,6 +51,12 @@ export const CreateNotebookModal: FC<CreateNotebookModalProps> = ({
         await onCreate(normalized);
     };
 
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+        if (event.key === 'Enter' && name.trim() && !isSubmitting) {
+            handleSubmit();
+        }
+    };
+
     return (
         <Transition show={open} as={Fragment}>
             <Dialog as="div" className="relative z-50" onClose={onClose}>
@@ -97,6 +103,7 @@ export const CreateNotebookModal: FC<CreateNotebookModalProps> = ({
                                             setError(null);
                                         }
                                     }}
+                                    onKeyDown={handleKeyDown}
                                     placeholder="Nhập tên notebook"
                                     className={`w-full rounded-2xl border bg-gray-50 px-4 py-3 text-sm text-gray-900 outline-none transition-colors focus:bg-white ${error ? 'border-red-300 focus:border-red-500' : 'border-gray-200 focus:border-blue-500'}`}
                                 />
