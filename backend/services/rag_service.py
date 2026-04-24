@@ -681,7 +681,7 @@ class RAGService:
 #gọi graph-rag       
         print(f"[CHAT] Calling GraphRAG...")
         try:
-            answer_graph = self.GRS.answer_question(notebook_id, rewritten_question)
+            answer_graph = self.GRS.answer_question(notebook_id, question)
             print(f"[CHAT] GraphRAG response received, length: {len(answer_graph) if answer_graph else 0}")
         except Exception as e:
             # Silently fail graph RAG, use empty string as fallback

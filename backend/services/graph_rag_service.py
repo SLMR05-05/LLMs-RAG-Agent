@@ -170,13 +170,13 @@ class GraphRAGService:
                 ctx_id = f"CONTEXT_{unique_suffix}"
                 doc_id = f"DOC_{unique_suffix}"
                 
-                content = doc.page_content[:3000].replace('"', "'") 
+                content = doc.page_content.replace('"', "'") 
                 
                 query = """
                 MERGE (d:Document {id: $doc_id})
                 ON CREATE SET d.source = $source
 
-                CREATE (c:CONTEXT {id: $ctx_id, content: $content})
+                CREATE (c:CONTEXT {id: $ctx_id, content: $content, description: $doc_id, source: $source, index: $index}) 
                 MERGE (d)-[:HAS_CONTEXT]->(c)
                 """
                 
@@ -184,7 +184,8 @@ class GraphRAGService:
                     "ctx_id": ctx_id,
                     "content": content,
                     "doc_id": doc_id,
-                    "source": doc.metadata.get("source_name", "Unknown")
+                    "source": doc.metadata.get("source_name", "Unknown"),
+                    "index": idx,  # Lưu số thứ tự vòng lặp
                 }
                 self.graph.query(query, params)
                 count += 1
@@ -200,6 +201,7 @@ class GraphRAGService:
         
     def ask_graph_question(self, question: str) -> str:
         if self.graph is None: return "❌ Kết nối DB lỗi."
+
 
         try:
             # Tìm các context có nội dung liên quan đến câu hỏi (giản đơn)
@@ -232,58 +234,79 @@ class GraphRAGService:
             # Giới hạn 3 từ khóa quan trọng nhất để tránh query quá dài
             for kw in keywords[:3]:
                 where_clauses.append(f"n.id CONTAINS '{kw}'")
-                where_clauses.append(f"n.description CONTAINS '{kw}'")
+                where_clauses.append(f"toLower(ctx.content) CONTAINS toLower('{kw}')")
 
             where_condition = " OR ".join(where_clauses)
             print(f"[GraphRAG] WHERE condition: {where_condition}...")
             
-            query = f"""
-            MATCH (n) 
-            WHERE {where_condition}
-            MATCH (n)-[:HAS_CONTEXT]->(ctx:CONTEXT)
-            RETURN DISTINCT ctx.content as content
-            LIMIT 10
-            """
+            # Kiểm tra xem người dùng có muốn tóm tắt không
+            summary_triggers = ["tóm tắt", "tổng hợp", "ý chính", "nội dung chính"]
+            is_summary_req = any(t in question.lower() for t in summary_triggers)
+
+            if is_summary_req or not keywords:
+                # Lấy 15 đoạn văn bản đầu tiên để tóm tắt
+                query = """
+                MATCH (ctx:CONTEXT)
+                RETURN ctx.content as content, ctx.index as id
+                ORDER BY ctx.index ASC
+                LIMIT 15
+                """
+            else:
+                # Logic tìm theo từ khóa (đã sửa để tìm đúng vào ctx.content)
+                where_clauses = []
+                for kw in keywords[:3]:
+                    where_clauses.append(f"toLower(ctx.content) CONTAINS toLower('{kw}')")
+                
+                where_condition = " OR ".join(where_clauses)
+                query = f"""
+                MATCH (n)-[:HAS_CONTEXT]->(ctx:CONTEXT)
+                WHERE {where_condition}
+                RETURN ctx.content as content, ctx.index as id
+                ORDER BY ctx.index ASC
+                LIMIT 10
+                """
+
             results = self.graph.query(query)
+
             print(f"{results.result_set}")
-            
             context_parts = []
-            # Quan trọng: Duyệt kết quả của FalkorDB
+            results_list = []
             if results.result_set:
-                print(f"--- RAW RESULTS (Row count: {len(results.result_set)}) ---")
-                for idx, row in enumerate(results.result_set):
-                    print(f"Row {idx}: {row}")
-                print("-------------------------")
                 for row in results.result_set:
-                    content = row[0] # Lấy cột đầu tiên (c.content)
-                    print(f"{content}")
-
-                    if content:
-                        context_parts.append(content)
-            # Loại bỏ trùng lặp nếu có
-            context_parts = list(set(context_parts))
-
+                    results_list.append({
+                        "id": row[1],      # ctx.id
+                        "content": row[0]  # ctx.content
+                    })
+            results_list.sort(key=lambda x: x['id'])
+            context_parts = [item['content'] for item in results_list]
 
             context_text = "\n---\n".join(context_parts)
             
             # Gửi cho LLM
-            prompt = f"""Bạn là chuyên gia phân tích tài liệu.
-                    Dựa trên nội dung tài liệu dưới đây, hãy trả lời câu hỏi một cách chi tiết:
+            prompt = f"""Bạn là một chuyên gia phân tích dữ liệu và tóm tắt văn bản chuyên nghiệp.
+            Nhiệm vụ của bạn là đọc kỹ tài liệu được cung cấp dưới đây và xử lý yêu cầu của người dùng một cách chính xác, logic và dễ hiểu.
 
-                    === NỘI DUNG TÀI LIỆU ===
-                    {context_text}
+            === NỘI DUNG TÀI LIỆU ===
+            {context_text}
 
-                    === CÂU HỎI ===
-                    {question}
+            === YÊU CẦU / CÂU HỎI ===
+            {question}
 
-                    === HƯỚNG DẪN ===
-                    1. Sử dụng CHỈ nội dung từ tài liệu, không bịa chuyện
-                    2. Trả lời chi tiết với ví dụ từ tài liệu
-                    3. nếu câu hỏi có dạng "tóm tắt" "ý chính" "tóm gọn" thì bạn tóm tắt tài liệu
-                    3. Nếu tài liệu không đề cập, nói "Tài liệu không nêu"
+            === HƯỚNG DẪN CHI TIẾT (BẮT BUỘC TUÂN THỦ) ===
+            1. TUYỆT ĐỐI TRUNG THỰC: Chỉ sử dụng dữ kiện có trong "NỘI DUNG TÀI LIỆU". Tuyệt đối không tự suy diễn, bịa đặt (hallucinate) hoặc dùng kiến thức bên ngoài.
+            2. XỬ LÝ KHI THIẾU THÔNG TIN: Nếu câu hỏi nằm ngoài phạm vi tài liệu, hãy trả lời đúng nguyên văn: "Tài liệu được cung cấp không đề cập đến thông tin này."
+            3. HƯỚNG DẪN TÓM TẮT (Nếu yêu cầu là "tóm tắt", "ý chính", "tổng hợp"):
+            - Cấu trúc rõ ràng: Bắt đầu bằng một câu tổng quan, sau đó chia thành các ý chính.
+            - Nhấn mạnh thông tin lõi: Giữ lại các số liệu quan trọng, tên riêng, hoặc kết luận chính.
+            4. HƯỚNG DẪN TRẢ LỜI CHI TIẾT (Nếu là câu hỏi cụ thể):
+            - Trả lời trực tiếp vào trọng tâm câu hỏi.
+            - Luôn kèm theo ví dụ, số liệu hoặc trích dẫn từ tài liệu để làm dẫn chứng.
+            5. ĐỊNH DẠNG TRÌNH BÀY: Sử dụng Markdown một cách thông minh. Dùng in đậm (**chữ**) cho từ khóa quan trọng, và dùng gạch đầu dòng (-) hoặc đánh số (1,2,3) để nội dung dễ đọc, rành mạch.
 
-                    === TRẢ LỜI ==="""
-
+            === TRẢ LỜI ===
+            """
+            print("Calling Ollama with model: qwen2.5:1.5b")
+            print(f"{prompt}")
             response = self.chat_llm.invoke(prompt)
             return response.content
             
