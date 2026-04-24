@@ -47,7 +47,8 @@ export interface ChatSettings {
 export interface ChatMessage {
     id: string;
     role: 'user' | 'assistant' | 'assistantGraphRag';
-    content: string;
+    content?: string | "";
+    contentGraphRag?: string | "";
     citations?: number[];
     citationDetails?: Array<{
         source_name: string;

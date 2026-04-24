@@ -296,7 +296,8 @@ export const apiService = {
             .map((item) => ({
                 id: item.message_id,
                 role: item.role,
-                content: item.content,
+                content: item.role === 'assistant' || item.role === 'user' ? item.content : undefined,
+                contentGraphRag: item.role === 'assistantGraphRag' ? item.content : undefined,
                 timestamp: item.created_at || new Date().toISOString(),
             }));
 
